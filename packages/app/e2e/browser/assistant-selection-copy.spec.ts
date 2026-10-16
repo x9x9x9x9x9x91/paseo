@@ -1,5 +1,9 @@
-import type { BrowserContext, Locator } from "@playwright/test";
+import type { BrowserContext } from "@playwright/test";
 import { expect, test, type Page } from "../support/fixtures";
+import {
+  assistantMessageBlocks,
+  selectAssistantTextRange,
+} from "../support/helpers/assistant-selection";
 import { openAgentRoute, seedMockAgentWorkspace } from "../support/helpers/mock-agent";
 
 const CROSS_STRUCTURE_MARKDOWN = [
@@ -95,14 +99,6 @@ interface ClipboardContent {
 
 async function allowRichClipboard(context: BrowserContext): Promise<void> {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-}
-
-/**
- * The rows of one assistant message. A message renders one row per Markdown block, so
- * every locator and every text walk below covers the group, not a single block.
- */
-function assistantMessageBlocks(page: Page): Locator {
-  return page.locator("[data-message-id]").filter({ has: page.getByTestId("assistant-message") });
 }
 
 async function selectStructuredClipboardFixture(page: Page): Promise<void> {
@@ -257,64 +253,6 @@ async function doubleClickAssistantMarkdownText(
     .locator(`[data-paseo-markdown-tag="${tag}"]`)
     .filter({ hasText: text })
     .dblclick({ position: { x: 5, y: 5 } });
-}
-
-async function selectAssistantTextRange(
-  page: Page,
-  startText: string,
-  endText: string,
-): Promise<void> {
-  await assistantMessageBlocks(page).evaluateAll(
-    (blocks, selectedRange) => {
-      // The message's text nodes in reading order, across every block row.
-      const nodes: Text[] = [];
-      for (const block of blocks) {
-        const blockWalker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
-        let found = blockWalker.nextNode();
-        while (found) {
-          nodes.push(found as Text);
-          found = blockWalker.nextNode();
-        }
-      }
-      let cursor = 0;
-      const walker = { nextNode: () => nodes[cursor++] ?? null };
-      let startNode: Node | null = null;
-      let startOffset = -1;
-      let endNode: Node | null = null;
-      let endOffset = -1;
-      let textNode = walker.nextNode();
-      while (textNode) {
-        if (!startNode) {
-          const offset = textNode.textContent?.indexOf(selectedRange.startText) ?? -1;
-          if (offset >= 0) {
-            startNode = textNode;
-            startOffset = offset;
-          }
-        }
-        if (startNode) {
-          const offset = textNode.textContent?.indexOf(selectedRange.endText) ?? -1;
-          if (offset >= 0) {
-            endNode = textNode;
-            endOffset = offset + selectedRange.endText.length;
-            break;
-          }
-        }
-        textNode = walker.nextNode();
-      }
-      if (!startNode || !endNode) {
-        throw new Error(
-          `Could not find assistant text range: ${selectedRange.startText} — ${selectedRange.endText}`,
-        );
-      }
-      const range = document.createRange();
-      range.setStart(startNode, startOffset);
-      range.setEnd(endNode, endOffset);
-      const selection = window.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    },
-    { startText, endText },
-  );
 }
 
 /**
