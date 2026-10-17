@@ -1,0 +1,34 @@
+# The fork's release line
+
+This fork ships Paseo's desktop app with features upstream has not merged yet. `fork/release` is upstream's latest stable tag plus the fork's own commits, and every upstream stable release gets a fork release the same day. Today that is the Quote button: select text in an agent message and quote it into the composer, upstream pull [#7176](https://github.com/getpaseo/paseo/pull/7176).
+
+## What a fork release changes
+
+Only the app (`packages/app`) and the build config: the update feed in `packages/desktop/electron-builder.yml` and this folder. The daemon, the CLI, the desktop shell and the lockfile are upstream's source of the same tag; the job refuses to build a branch that changes anything else. Swapping the app leaves a running daemon alone: the desktop app stops only a daemon it started itself.
+
+Commits that belong to the fork itself (the feed, this job) start with `fork: `. Every other commit is a feature, and its upstream pull goes in `UPSTREAM_PULLS` in `release.mjs`.
+
+## Versions
+
+A fork release is the upstream version plus `-fork.N`: `0.11.4-fork.1`, then `0.11.4-fork.2` when a commit lands on `fork/release` before upstream's next release, then `0.11.5-fork.1`. The tag and the GitHub release carry the same name, without a `v`, so upstream's release workflows (triggered by `v*` tags) never match it.
+
+Semver reads `0.11.4-fork.1` newer than every older upstream release and every earlier fork build, so the app updates; the app keeps the stock `latest` channel. Electron's updater on macOS takes only a build signed by the same team as the running app, so a fork app updates from the fork's releases and never from upstream's, and the reverse. The renderer reads its version from `packages/app`, which stays upstream's, so the app/daemon version check compares `0.11.4` with the daemon's `0.11.4`.
+
+## The job
+
+`release.mjs` runs hourly on sincoder as the launch agent `com.alma.paseo-fork-release`, inside the logged-in session, because the Developer ID key and the `substrate-notary` profile live in its login keychain, which is locked over ssh. `install.sh` sets it up under `~/Coding/_forks/paseo-release`: `tools/` follows `fork/release` and holds the job, `build/` is where it rebases and builds. Each run with something to do leaves its logs in `runs/<time>/`; `state.json` and `job.log` say what it last did.
+
+A run asks GitHub for upstream's latest release (published, not a prerelease), then:
+
+1. A newer upstream release: rebase the branch onto its tag. On a conflict, a headless agent tries once; it reaches sin0's model proxy through an ssh tunnel, since sincoder has no login of its own. If it cannot resolve the conflict, Tim gets a notice with the conflict and the app stays on the last release.
+2. Check: typecheck, lint, format, this folder's tests, the app's unit tests and the Quote and Copy Playwright specs, on the Node major upstream's release workflow uses.
+3. Build the arm64 app, signed with `Developer ID Application: Tim Roth (HKM8HFGKC6)` and notarized, then verify the signature, the notarization, the version and the feed inside the app.
+4. Push the rebased branch and publish the release, with `latest-mac.yml`, the zip and dmg and their blockmaps, marked latest.
+
+It publishes only when every step passed. A failure keeps the previous release and goes to Tim's notifications on sin0 through Alma's door, as source `paseo-fork`; the same upstream release and branch are retried for three runs, then the job waits for a new upstream release or a new commit. Every run copies `state.json` to sin0, where Alma's sched_watch warns when the job has not checked upstream for 12 hours, sincoder being down included.
+
+Run it by hand on sincoder through `~/bin/gui-run.sh` so it gets the session's keychain. `--dry-run` builds, signs, notarizes and verifies without pushing, publishing or notifying; `--branch <name>` builds another branch of the fork and `--force` builds a branch that is already released, both with `--dry-run` only.
+
+## Retirement
+
+When upstream merges the feature, the fork stops. A run retires when every pull in `UPSTREAM_PULLS` is merged into the new stable release, or when the rebase drops every feature commit as already upstream. It renames its launch agent so it does not load again and tells Tim. The app stays on the last fork release; because of the signing rule above it cannot update itself to stock Paseo, so going back is one hand install of upstream's dmg over `/Applications/Paseo.app`, which leaves the daemon and its agents running.
