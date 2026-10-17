@@ -24,6 +24,7 @@ import { computePosition, type Alignment, type Rect, type Size } from "@/compone
 import { Button } from "@/components/ui/button";
 import { FloatingSurface, type FloatingSurfaceProps } from "@/components/ui/floating";
 import { EditingTextInput, type EditingTextInputHandle } from "@/components/ui/text-input";
+import { resolveKeyboardFocusScope } from "@/keyboard/focus-scope";
 import {
   getOverlayRoot,
   OverlayLayerProvider,
@@ -42,7 +43,8 @@ const FADE_IN = FadeIn.duration(80);
 
 /**
  * Quote for a selection inside one agent message: a Quote button at the end of the
- * selection opens a note box, and Enter puts the quote and the note into the composer.
+ * selection, or Enter while it shows, opens a note box, and Enter puts the quote and the
+ * note into the composer.
  *
  * The quote is read when the selection settles, so a message that keeps streaming, or
  * a selection the note box takes over, still quotes what was selected.
@@ -172,12 +174,20 @@ function QuoteButton({
   const layer = useOverlayLayer("floating");
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return false;
-      event.preventDefault();
-      onDismiss();
-      return true;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onDismiss();
+        return true;
+      }
+      // Like Escape, this comes before the app's shortcuts, dictation's Enter included.
+      if (isBareEnter(event) && !focusReadsEnter(event.target)) {
+        event.preventDefault();
+        onPress();
+        return true;
+      }
+      return false;
     },
-    [onDismiss],
+    [onDismiss, onPress],
   );
   const setOverlayScope = useWebOverlayRegistration({
     active: true,
@@ -255,7 +265,8 @@ function QuoteNoteBox({
         !isImeComposingKeyboardEvent(event)
       ) {
         event.preventDefault();
-        onSubmit(noteRef.current);
+        // A held Enter that opened the box repeats into it; only a fresh press adds the quote.
+        if (!event.repeat) onSubmit(noteRef.current);
         return true;
       }
       return false;
@@ -405,6 +416,27 @@ function useRangeEndRect(range: Range): Rect | null {
 function rangeEndRect(range: Range): Rect | null {
   const last = Array.from(range.getClientRects()).findLast((box) => box.width > 0);
   return last ? { x: last.left, y: last.top, width: last.width, height: last.height } : null;
+}
+
+function isBareEnter(event: KeyboardEvent): boolean {
+  return (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !isImeComposingKeyboardEvent(event)
+  );
+}
+
+/**
+ * Whether the focused element answers Enter itself: a text field, the composer or the
+ * terminal, or a control Enter presses. Only Enter that would otherwise do nothing opens
+ * the note box.
+ */
+function focusReadsEnter(target: EventTarget | null): boolean {
+  if (resolveKeyboardFocusScope({ target, commandCenterOpen: false }) !== "other") return true;
+  return target instanceof HTMLElement && target !== document.body && target.tabIndex >= 0;
 }
 
 function preventDefault(event: Event) {

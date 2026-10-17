@@ -122,6 +122,75 @@ test("quoting a selection puts it and the note into the composer without sending
   }
 });
 
+test("Enter opens the note box while the button shows, so quoting runs on the keyboard", async ({
+  page,
+}) => {
+  const agent = await openIdleAgent(page, "assistant-selection-quote-enter-");
+  try {
+    // A real double-click, as a reader selects: focus leaves the composer.
+    await assistantMessageBlocks(page)
+      .getByText("Closing paragraph.")
+      .dblclick({ position: { x: 5, y: 5 } });
+    await expect(quoteButton(page)).toBeVisible();
+    await expect(composer(page)).not.toBeFocused();
+
+    // Enter with a modifier is not Quote's.
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.press("ControlOrMeta+Enter");
+    await page.keyboard.press("Alt+Enter");
+    await expect(noteInput(page)).toHaveCount(0);
+    await expect(quoteButton(page)).toBeVisible();
+
+    await page.keyboard.press("Enter");
+    await expect(noteInput(page)).toBeFocused();
+    await expect(quoteButton(page)).toHaveCount(0);
+    await page.keyboard.type("typed without the mouse");
+    await page.keyboard.press("Enter");
+
+    await expect(noteInput(page)).toHaveCount(0);
+    await expect(composer(page)).toBeFocused();
+    await expect(composer(page)).toHaveValue("> Closing\n\ntyped without the mouse");
+  } finally {
+    await agent.cleanup();
+  }
+});
+
+test("Enter stays with the composer and a focused button while the Quote button shows", async ({
+  context,
+  page,
+}) => {
+  const agent = await openIdleAgent(page, "assistant-selection-quote-enter-focus-");
+  try {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+
+    // A focused button presses on Enter, as it does without a selection.
+    await assistantMessageBlocks(page)
+      .getByText("Closing paragraph.")
+      .dblclick({ position: { x: 5, y: 5 } });
+    await expect(quoteButton(page)).toBeVisible();
+    await page.getByRole("button", { name: "Copy turn" }).last().focus();
+    await expect(quoteButton(page)).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+    await expect(noteInput(page)).toHaveCount(0);
+
+    // Selecting by script leaves focus in the composer, where Enter still sends.
+    await composer(page).fill("Sent with Enter");
+    await selectAssistantTextRange(page, "First point", "First point");
+    await expect(quoteButton(page)).toBeVisible();
+    await expect(composer(page)).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    await expect(noteInput(page)).toHaveCount(0);
+    await expect(composer(page)).toHaveValue("");
+    await expect(
+      page.getByTestId("user-message").filter({ hasText: "Sent with Enter" }),
+    ).toBeVisible();
+  } finally {
+    await agent.cleanup();
+  }
+});
+
 test("Escape closes the note box and keeps the selection, then dismisses the button", async ({
   page,
 }) => {
