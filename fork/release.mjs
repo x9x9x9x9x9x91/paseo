@@ -21,6 +21,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { designatedRequirement } from "./sign-mac.cjs";
 
 export const FORK_REPO = "x9x9x9x9x9x91/paseo";
 export const UPSTREAM_REPO = "getpaseo/paseo";
@@ -35,6 +36,8 @@ const FORK_SUBJECT = /^fork: /;
 // other package stay upstream's source of the same tag, lockfile included.
 const ALLOWED_PATHS = [/^packages\/app\//, /^packages\/desktop\/electron-builder\.yml$/, /^fork\//];
 const LABEL = "com.alma.paseo-fork-release";
+// electron-builder signs through this hook, which lets the app accept upstream's signature too.
+const SIGN_HOOK = fileURLToPath(new URL("./sign-mac.cjs", import.meta.url));
 const NOTARY_PROFILE = process.env.PASEO_FORK_NOTARY_PROFILE ?? "substrate-notary";
 // Notices go through Alma's notification door on sin0, whose dead-man probe also reads
 // state.json when this job goes quiet.
@@ -130,6 +133,17 @@ export function nodeMajorFromWorkflow(workflow) {
   return match ? Number(match[1]) : null;
 }
 
+/** codesign prints a requirement its own way (quotes, `exists` comments); compare what it says. */
+export function sameRequirement(printed, expected) {
+  const plain = (text) =>
+    text
+      .replace(/\/\*.*?\*\//g, "")
+      .replaceAll('"', "")
+      .replace(/\s+/g, " ")
+      .trim();
+  return plain(printed) === plain(expected);
+}
+
 class StepFailure extends Error {
   constructor(step, message, logFile = null) {
     super(message);
@@ -139,18 +153,23 @@ class StepFailure extends Error {
 }
 
 function parseArgs(argv) {
-  const options = { dryRun: false, branch: RELEASE_BRANCH, force: false };
+  const options = { dryRun: false, branch: RELEASE_BRANCH, force: false, retire: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--dry-run") options.dryRun = true;
     else if (arg === "--force") options.force = true;
+    else if (arg === "--retire") options.retire = true;
     else if (arg === "--branch") options.branch = argv[++index];
-    else throw new Error(`unknown argument ${arg}; use --dry-run, --force or --branch <name>`);
+    else {
+      throw new Error(
+        `unknown argument ${arg}; use --dry-run, --force, --retire or --branch <name>`,
+      );
+    }
   }
-  // A release from another branch, or a second release of a released commit, would become
-  // every fork app's update.
-  if ((options.branch !== RELEASE_BRANCH || options.force) && !options.dryRun) {
-    throw new Error("--branch and --force build only with --dry-run");
+  // A release from another branch, a second release of a released commit or a handover
+  // nobody asked for would become every fork app's update.
+  if ((options.branch !== RELEASE_BRANCH || options.force || options.retire) && !options.dryRun) {
+    throw new Error("--branch, --force and --retire build only with --dry-run");
   }
   return options;
 }
@@ -354,11 +373,24 @@ function nodeEnv(tag, runDir) {
   return { PATH: `${bin}:${process.env.PATH}` };
 }
 
+// What every build needs before it starts, the handover's included.
+const PREPARE_STEPS = [
+  ["npm-ci", "node", ["scripts/npm-retry.mjs", "ci"]],
+  // npm ci leaves electron/dist empty here; the build and its smoke test need the binary.
+  ["electron", "node", ["node_modules/electron/install.js"]],
+];
+
+function runSteps(steps, { runDir, env }) {
+  for (const [step, command, args] of steps) {
+    const started = Date.now();
+    run(command, args, { step, runDir, env, stream: true, timeoutMs: 60 * 60_000 });
+    log(`  ${step} ok (${Math.round((Date.now() - started) / 1000)} s)`);
+  }
+}
+
 function gate({ runDir, env }) {
   const steps = [
-    ["npm-ci", "node", ["scripts/npm-retry.mjs", "ci"]],
-    // npm ci leaves electron/dist empty here; the build and its smoke test need the binary.
-    ["electron", "node", ["node_modules/electron/install.js"]],
+    ...PREPARE_STEPS,
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
     ["playwright", "npx", ["playwright", "install", "chromium"]],
     ["release-tests", "node", ["--test", "fork/release.test.mjs"]],
@@ -371,11 +403,7 @@ function gate({ runDir, env }) {
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
     ["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...FEATURE_SPECS]],
   ];
-  for (const [step, command, args] of steps) {
-    const started = Date.now();
-    run(command, args, { step, runDir, env, stream: true, timeoutMs: 60 * 60_000 });
-    log(`  ${step} ok (${Math.round((Date.now() - started) / 1000)} s)`);
-  }
+  runSteps(steps, { runDir, env });
 }
 
 function checkScope(tag, runDir) {
@@ -389,8 +417,8 @@ function checkScope(tag, runDir) {
   }
 }
 
-function buildDesktop({ version, runDir, env }) {
-  const owner = FORK_REPO.split("/")[0];
+/** The Mac app, versioned, updating from `owner`'s releases, signed through SIGN_HOOK. */
+function buildDesktop({ version, owner, runDir, env }) {
   const packagePath = path.join(BUILD, "packages/desktop/package.json");
   const original = readFileSync(packagePath, "utf8");
   const releaseDir = path.join(BUILD, "packages/desktop/release");
@@ -411,6 +439,7 @@ function buildDesktop({ version, runDir, env }) {
         "-c.publish.releaseType=release",
         "-c.publish.channel=latest",
         `-c.publish.owner=${owner}`,
+        `-c.mac.sign=${SIGN_HOOK}`,
       ],
       {
         step: "build",
@@ -433,12 +462,29 @@ function buildDesktop({ version, runDir, env }) {
   return releaseDir;
 }
 
-/** The release is what electron-updater expects, signed, notarized and pointing at the fork. */
-function verifyRelease({ releaseDir, version, runDir }) {
+/**
+ * The release is what electron-updater expects, signed, notarized, pointing at `owner` and
+ * accepting upstream's signature for its next update.
+ */
+function verifyRelease({ releaseDir, version, owner, runDir }) {
   const step = "verify";
-  const owner = FORK_REPO.split("/")[0];
   const app = path.join(releaseDir, "mac-arm64", "Paseo.app");
+  const plist = path.join(app, "Contents/Info.plist");
+  // Also fails an app that does not satisfy its own designated requirement.
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], { step, runDir });
+  const identifier = run("plutil", ["-extract", "CFBundleIdentifier", "raw", plist], {
+    step,
+    runDir,
+  }).stdout;
+  const designated = run("codesign", ["-d", "-r-", app], { step, runDir })
+    .output.split("\n")
+    .find((line) => line.startsWith("designated => "));
+  if (!designated || !sameRequirement(designated, designatedRequirement(identifier))) {
+    throw new StepFailure(
+      step,
+      `the app's designated requirement is not the fork's two-team one: ${designated}`,
+    );
+  }
   const assessment = run("spctl", ["--assess", "--type", "execute", "--verbose=4", app], {
     step,
     runDir,
@@ -447,7 +493,6 @@ function verifyRelease({ releaseDir, version, runDir }) {
     throw new StepFailure(step, `the app is not notarized: ${assessment.output}`);
   }
   run("xcrun", ["stapler", "validate", app], { step, runDir });
-  const plist = path.join(app, "Contents/Info.plist");
   const bundleVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", plist], {
     step,
     runDir,
@@ -534,6 +579,11 @@ function releaseNotes({ upstreamTag, features }) {
   const upstream = `[${upstreamTag}](https://github.com/${UPSTREAM_REPO}/releases/tag/${upstreamTag})`;
   const list = features.map((subject) => `- ${subject}`).join("\n");
   return `Upstream Paseo ${upstream} plus:\n\n${list}\n\nBuilt, signed and notarized on sincoder by fork/release.mjs. The Mac app updates itself from this repository's releases.\n`;
+}
+
+function handoverNotes({ upstreamTag }) {
+  const upstream = `[${upstreamTag}](https://github.com/${UPSTREAM_REPO}/releases/tag/${upstreamTag})`;
+  return `Upstream Paseo ${upstream}, unchanged, and the fork's last release: upstream now carries the fork's features. Signed by the fork so a fork app takes it, it updates from upstream's releases, so the app moves on to stock Paseo by itself.\n\nBuilt, signed and notarized on sincoder by fork/release.mjs.\n`;
 }
 
 function shellQuote(value) {
@@ -675,7 +725,11 @@ function retireLaunchAgent() {
   if (existsSync(plist)) renameSync(plist, `${plist}.retired-${now().slice(0, 10)}`);
 }
 
-function release({ ctx, options, env, runDir, features }) {
+/**
+ * Build, verify and publish the checked-out tree as the fork's next release. A `handover` is
+ * the last one: upstream's own tag, updating from upstream's releases.
+ */
+function release({ ctx, options, env, runDir, features, handover = false }) {
   // A draft is what an earlier run of this job left when it died mid-publish.
   const ours = (entry) => /-fork\.\d+$/.test(entry.tag);
   if (!options.dryRun) {
@@ -685,9 +739,10 @@ function release({ ctx, options, env, runDir, features }) {
   }
   const tags = forkReleases(runDir).map((entry) => entry.tag);
   ctx.version = forkVersion(ctx.latestTag, nextForkNumber(ctx.latestTag, tags));
-  log(`  building ${ctx.version}`);
-  const releaseDir = buildDesktop({ version: ctx.version, runDir, env });
-  const files = verifyRelease({ releaseDir, version: ctx.version, runDir });
+  const owner = (handover ? UPSTREAM_REPO : FORK_REPO).split("/")[0];
+  log(`  building ${ctx.version}${handover ? `, updating from ${owner}` : ""}`);
+  const releaseDir = buildDesktop({ version: ctx.version, owner, runDir, env });
+  const files = verifyRelease({ releaseDir, version: ctx.version, owner, runDir });
   log(`  signed, notarized and verified ${ctx.version}`);
   if (options.dryRun) {
     log(`  dry run, not published: ${releaseDir}`);
@@ -695,7 +750,11 @@ function release({ ctx, options, env, runDir, features }) {
   }
   // The release's commit has to be on the fork before GitHub can tag it.
   const target = git(["rev-parse", "HEAD"], { runDir });
-  if (target !== ctx.head) {
+  if (handover) {
+    // Upstream's tagged commit need not be on any fork branch; the release's own tag carries
+    // it there, and the branch stays where its last feature release left it.
+    git(["push", "origin", `${target}:refs/tags/${ctx.version}`], { runDir });
+  } else if (target !== ctx.head) {
     const lease = `--force-with-lease=${options.branch}:${ctx.head}`;
     git(["push", lease, "origin", `HEAD:refs/heads/${options.branch}`], { runDir });
   }
@@ -703,7 +762,9 @@ function release({ ctx, options, env, runDir, features }) {
     version: ctx.version,
     target,
     files,
-    notes: releaseNotes({ upstreamTag: ctx.latestTag, features }),
+    notes: handover
+      ? handoverNotes({ upstreamTag: ctx.latestTag })
+      : releaseNotes({ upstreamTag: ctx.latestTag, features }),
     runDir,
   });
   ctx.publishedCommit = target;
@@ -711,20 +772,27 @@ function release({ ctx, options, env, runDir, features }) {
 }
 
 /**
- * Upstream carries the fork's features. The app cannot follow on its own: macOS's updater
- * takes only a build signed by the team that signed the running app, and upstream signs with
- * its own. So the job stops and says that going back to stock Paseo is one hand install.
+ * Upstream carries the fork's features, so the fork hands the app back and stops. Its last
+ * release is upstream's tag as it is, updating from upstream's releases: a fork app takes it
+ * because the fork signed it, and it takes stock Paseo next because its designated requirement
+ * names upstream's team too (sign-mac.cjs). Upstream's release workflow already checked the tag.
  */
-function retire(reason) {
-  log(`  ${reason}: retiring`);
+function retire({ ctx, options, runDir, reason }) {
+  log(`  ${reason}: handing the app back to upstream`);
+  git(["checkout", "-q", "-f", "--detach", ctx.latestTag], { runDir });
+  const env = nodeEnv(ctx.latestTag, runDir);
+  runSteps(PREPARE_STEPS, { runDir, env });
+  release({ ctx, options, env, runDir, handover: true });
   return "retired";
 }
 
 function work({ ctx, options, plan, runDir }) {
   // A run that died mid-rebase leaves it in progress; the next one starts clean.
   if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
+  if (options.retire) return retire({ ctx, options, runDir, reason: "--retire" });
   if (plan === "rebase" && upstreamPullsLanded(ctx.latestTag, runDir)) {
-    return retire(`upstream ${ctx.latestTag} carries the fork's pulls`);
+    const reason = `upstream ${ctx.latestTag} carries the fork's pulls`;
+    return retire({ ctx, options, runDir, reason });
   }
   if (plan === "rebase") {
     const rebased = rebaseOnto({
@@ -747,7 +815,7 @@ function work({ ctx, options, plan, runDir }) {
   }
   if (features.length === 0) {
     // The rebase dropped every feature commit as already upstream: the same as a merged pull.
-    return retire(`no feature commit left on ${ctx.latestTag}`);
+    return retire({ ctx, options, runDir, reason: `no feature commit left on ${ctx.latestTag}` });
   }
   checkScope(ctx.latestTag, runDir);
   const env = nodeEnv(ctx.latestTag, runDir);
@@ -781,17 +849,23 @@ function settle({ outcome, error, ctx, state, runDir }) {
     log(`published ${ctx.version}`);
   } else if (outcome === "retired") {
     next.lastOkAt = stamp;
-    next.retired = { upstreamTag: ctx.latestTag, at: stamp };
+    next.lastPublished = {
+      version: ctx.version,
+      commit: ctx.publishedCommit,
+      upstreamTag: ctx.latestTag,
+      at: stamp,
+    };
+    next.retired = { upstreamTag: ctx.latestTag, handover: ctx.version, at: stamp };
     delete next.failure;
     retireLaunchAgent();
-    const stock = `https://github.com/${UPSTREAM_REPO}/releases/tag/${ctx.latestTag}`;
+    const handover = `https://github.com/${FORK_REPO}/releases/tag/${ctx.version}`;
     next.pendingNotice = {
       level: "info",
       key: `retired ${ctx.latestTag}`,
-      title: `Quote is in upstream Paseo ${ctx.latestTag}: the fork job stopped`,
-      body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add and its release job on sincoder has stopped. Your app stays on ${previous} and gets no more updates.\n\nGoing back to stock Paseo is one hand install: macOS lets an app update itself only to a build signed by the same developer, and upstream signs with its own. Download the arm64 dmg from ${stock} and replace /Applications/Paseo.app (the daemon and your chats keep running), or ask Alma to swap it.\n`,
+      title: `Quote is in upstream Paseo ${ctx.latestTag}: your app goes back to stock by itself`,
+      body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add. Its release job on sincoder published one last release, ${ctx.version}: upstream's ${ctx.latestTag}, signed by the fork so your app accepts it, and updating from upstream's releases. Your app installs it at its next update, then stock Paseo ${ctx.latestTag} at the one after, with nothing to do on your side; the daemon and your chats keep running. The job has stopped.\n\nLast release: ${handover}\n`,
     };
-    log(`retired on ${ctx.latestTag}`);
+    log(`retired on ${ctx.latestTag} with ${ctx.version}`);
   } else {
     const failure =
       state.failure?.candidate === ctx.candidate
@@ -855,7 +929,7 @@ function runOnce(options, state) {
   }
   ctx.candidate = `${ctx.latestTag}@${ctx.head}`;
   const decided = decide(ctx);
-  const plan = options.force && decided === "current" ? "release" : decided;
+  const plan = (options.force || options.retire) && decided === "current" ? "release" : decided;
   const skip = !options.dryRun && shouldSkipCandidate(state.failure, ctx.candidate);
   if (plan === "current" || skip) {
     rmSync(runDir, { recursive: true, force: true });
