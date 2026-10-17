@@ -1,0 +1,915 @@
+#!/usr/bin/env node
+// The fork's release job. Upstream's latest stable release plus this branch's own commits,
+// checked, built, signed, notarized and published as a GitHub release on the fork, so the
+// Mac app updates itself from there. It runs hourly on sincoder as a launch agent in the
+// logged-in session, the only place its login keychain (signing, notary profile) is unlocked.
+// fork/README.md has the version scheme, the failure policy and the retirement path.
+import { spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const FORK_REPO = "x9x9x9x9x9x91/paseo";
+export const UPSTREAM_REPO = "getpaseo/paseo";
+export const RELEASE_BRANCH = "fork/release";
+// Upstream pull requests that carry this branch's feature commits. Once all of them are in an
+// upstream stable release, the fork has nothing left to add and retires.
+export const UPSTREAM_PULLS = [7176];
+// The fork's own commits (the update feed, this job) say so in their subject; every other
+// commit on the branch is a feature upstream does not have yet.
+const FORK_SUBJECT = /^fork: /;
+// A fork release changes the app and the build config only. The daemon, the CLI and every
+// other package stay upstream's source of the same tag, lockfile included.
+const ALLOWED_PATHS = [/^packages\/app\//, /^packages\/desktop\/electron-builder\.yml$/, /^fork\//];
+const LABEL = "com.alma.paseo-fork-release";
+const NOTARY_PROFILE = process.env.PASEO_FORK_NOTARY_PROFILE ?? "substrate-notary";
+// Notices go through Alma's notification door on sin0, whose dead-man probe also reads
+// state.json when this job goes quiet.
+const SIN0 = process.env.PASEO_FORK_NOTIFY_HOST ?? "sin0";
+const NOTIFY_COMMAND =
+  "/usr/bin/python3 /Users/sin0/Vault/Alma/Code/scheduled-tasks/vault_notifications.py";
+// Every state write is copied to sin0 (home-relative), where sched_watch warns once the job
+// has not checked upstream for 12 hours.
+const SIN0_STATE = "Vault/Alma/Local/Task-State/paseo-fork/state.json";
+// The conflict agent reaches sin0's model proxy through a tunnel: sincoder holds no login.
+const PROXY_PORT = 18318;
+const AGENT_MODEL = "claude-opus-5-5";
+// A candidate that failed this many runs waits for a new upstream release or a new commit on
+// the branch instead of rebuilding every hour.
+const MAX_ATTEMPTS = 3;
+const FEATURE_SPECS = [
+  "e2e/browser/assistant-selection-quote.spec.ts",
+  "e2e/browser/assistant-selection-copy.spec.ts",
+];
+
+const ROOT = process.env.PASEO_FORK_ROOT ?? path.join(os.homedir(), "Coding/_forks/paseo-release");
+const BUILD = path.join(ROOT, "build");
+const STATE_FILE = path.join(ROOT, "state.json");
+const LOCK_FILE = path.join(ROOT, "lock");
+const RUNS = path.join(ROOT, "runs");
+const JOB_LOG = path.join(ROOT, "job.log");
+const KEEP_RUNS = 20;
+
+const STABLE_TAG = /^v(\d+)\.(\d+)\.(\d+)$/;
+
+export function parseStableTag(tag) {
+  const match = STABLE_TAG.exec(tag ?? "");
+  return match ? match.slice(1, 4).map(Number) : null;
+}
+
+export function compareStableTags(left, right) {
+  const a = parseStableTag(left);
+  const b = parseStableTag(right);
+  if (!a || !b) throw new Error(`not a stable tag: ${a ? right : left}`);
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return 0;
+}
+
+/**
+ * The fork's version of an upstream release: `0.11.4-fork.1`, then `-fork.2` for the next
+ * fork build of the same release. Semver reads it newer than every older upstream release and
+ * every earlier fork build, so the app updates, and older than the stock release it is built on.
+ */
+export function forkVersion(upstreamTag, number) {
+  return `${upstreamTag.slice(1)}-fork.${number}`;
+}
+
+export function nextForkNumber(upstreamTag, releaseTags) {
+  const prefix = `${upstreamTag.slice(1)}-fork.`;
+  let highest = 0;
+  for (const tag of releaseTags) {
+    if (!tag.startsWith(prefix)) continue;
+    const number = Number(tag.slice(prefix.length));
+    if (Number.isInteger(number) && number > highest) highest = number;
+  }
+  return highest + 1;
+}
+
+export function pathsOutsideScope(paths) {
+  return paths.filter((file) => !ALLOWED_PATHS.some((pattern) => pattern.test(file)));
+}
+
+export function featureSubjects(subjects) {
+  return subjects.filter((subject) => !FORK_SUBJECT.test(subject));
+}
+
+/**
+ * What a run has to do: `rebase` onto a newer upstream release, `release` a branch head the
+ * fork has not published yet, or nothing (`current`). A branch ahead of upstream's latest
+ * release (upstream took a release back) waits for upstream to catch up.
+ */
+export function decide({ latestTag, baseTag, head, publishedCommit }) {
+  const order = compareStableTags(latestTag, baseTag);
+  if (order < 0) return "current";
+  if (order > 0) return "rebase";
+  return publishedCommit === head ? "current" : "release";
+}
+
+/** A candidate is retried until it has failed MAX_ATTEMPTS runs. */
+export function shouldSkipCandidate(failure, candidate) {
+  return failure?.candidate === candidate && failure.attempts >= MAX_ATTEMPTS;
+}
+
+export function nodeMajorFromWorkflow(workflow) {
+  const match = /node-version:\s*["']?(\d+)/.exec(workflow);
+  return match ? Number(match[1]) : null;
+}
+
+class StepFailure extends Error {
+  constructor(step, message, logFile = null) {
+    super(message);
+    this.step = step;
+    this.logFile = logFile;
+  }
+}
+
+function parseArgs(argv) {
+  const options = { dryRun: false, branch: RELEASE_BRANCH, force: false };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--force") options.force = true;
+    else if (arg === "--branch") options.branch = argv[++index];
+    else throw new Error(`unknown argument ${arg}; use --dry-run, --force or --branch <name>`);
+  }
+  // A release from another branch, or a second release of a released commit, would become
+  // every fork app's update.
+  if ((options.branch !== RELEASE_BRANCH || options.force) && !options.dryRun) {
+    throw new Error("--branch and --force build only with --dry-run");
+  }
+  return options;
+}
+
+function now() {
+  return new Date().toISOString();
+}
+
+function log(message) {
+  const line = `${now()} ${message}\n`;
+  process.stdout.write(line);
+  appendFileSync(JOB_LOG, line);
+}
+
+function readState() {
+  try {
+    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeState(state) {
+  const text = `${JSON.stringify(state, null, 2)}\n`;
+  const next = `${STATE_FILE}.next`;
+  writeFileSync(next, text);
+  renameSync(next, STATE_FILE);
+  const remote = `mkdir -p ${path.posix.dirname(SIN0_STATE)} && cat > ${SIN0_STATE}.next && mv ${SIN0_STATE}.next ${SIN0_STATE}`;
+  const copied = spawnSync(
+    "ssh",
+    ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", SIN0, remote],
+    {
+      input: text,
+      encoding: "utf8",
+      timeout: 60_000,
+    },
+  );
+  if (copied.status !== 0) log(`state not copied to ${SIN0} (exit ${copied.status})`);
+}
+
+function acquireLock() {
+  try {
+    const fd = openSync(LOCK_FILE, "wx");
+    writeFileSync(fd, String(process.pid));
+    closeSync(fd);
+    return true;
+  } catch {
+    const holder = Number(readFileSync(LOCK_FILE, "utf8"));
+    // The lock holds while its pid is still this job. An empty lock (the run died between
+    // creating and writing it) or a pid another process took after a restart is stale.
+    const command =
+      holder > 0
+        ? spawnSync("ps", ["-o", "command=", "-p", String(holder)], { encoding: "utf8" })
+        : null;
+    if (command?.status === 0 && command.stdout.includes("release.mjs")) return false;
+    unlinkSync(LOCK_FILE);
+    return acquireLock();
+  }
+}
+
+/**
+ * Run a command in the build clone. With a step, its output goes to that step's log in the
+ * run folder (streamed, for the long steps); a non-zero exit fails the step unless `quiet`.
+ */
+function run(
+  command,
+  args,
+  { step, runDir, cwd = BUILD, env = {}, input, timeoutMs, quiet, stream } = {},
+) {
+  const logFile = runDir && step ? path.join(runDir, `${step}.log`) : null;
+  const options = { cwd, env: { ...process.env, ...env }, input, timeout: timeoutMs };
+  let result;
+  if (stream && logFile) {
+    appendFileSync(logFile, `$ ${command} ${args.join(" ")}\n`);
+    const fd = openSync(logFile, "a");
+    try {
+      result = spawnSync(command, args, { ...options, stdio: ["ignore", fd, fd] });
+    } finally {
+      closeSync(fd);
+    }
+  } else {
+    result = spawnSync(command, args, {
+      ...options,
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    if (logFile) {
+      appendFileSync(
+        logFile,
+        `$ ${command} ${args.join(" ")}\n${result.stdout ?? ""}${result.stderr ?? ""}`,
+      );
+    }
+  }
+  if (logFile) appendFileSync(logFile, `exit=${result.status}\n`);
+  if (result.status !== 0 && !quiet) {
+    const reason = result.error?.message ?? `exit ${result.status}`;
+    throw new StepFailure(step ?? command, `${command} ${args.join(" ")}: ${reason}`, logFile);
+  }
+  const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  return { status: result.status, stdout, output: `${stdout}\n${stderr}`.trim() };
+}
+
+function git(args, options = {}) {
+  return run("git", args, { step: "git", ...options }).stdout;
+}
+
+function gh(args, options = {}) {
+  return run("gh", args, { step: "github", ...options }).stdout;
+}
+
+function rebaseInProgress() {
+  return ["rebase-merge", "rebase-apply"].some((dir) => existsSync(path.join(BUILD, ".git", dir)));
+}
+
+function forkReleases(runDir) {
+  const lines = gh(
+    [
+      "api",
+      `repos/${FORK_REPO}/releases?per_page=100`,
+      "--paginate",
+      "--jq",
+      ".[] | [.tag_name, .draft, .id, .target_commitish] | @tsv",
+    ],
+    { runDir },
+  );
+  return lines
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [tag, draft, id, target] = line.split("\t");
+      return { tag, draft: draft === "true", id, target };
+    });
+}
+
+/** Where upstream and the branch stand. Any failure here is GitHub or the network. */
+function poll(options, runDir) {
+  git(["fetch", "-q", "--prune", "--tags", "origin"], { runDir });
+  git(["fetch", "-q", "--tags", "--force", "upstream"], { runDir });
+  // GitHub's latest release is the newest published one that is neither draft nor prerelease.
+  const latestTag = gh(["api", `repos/${UPSTREAM_REPO}/releases/latest`, "--jq", ".tag_name"], {
+    runDir,
+  });
+  if (!parseStableTag(latestTag)) throw new Error(`upstream's latest release has tag ${latestTag}`);
+  const branchRef = `origin/${options.branch}`;
+  const head = git(["rev-parse", branchRef], { runDir });
+  const baseTag = git(
+    ["describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "--exclude", "*-*", branchRef],
+    {
+      runDir,
+    },
+  );
+  const published = run(
+    "gh",
+    ["api", `repos/${FORK_REPO}/releases/latest`, "--jq", ".target_commitish"],
+    {
+      runDir,
+      quiet: true,
+    },
+  );
+  return {
+    latestTag,
+    head,
+    baseTag,
+    publishedCommit: published.status === 0 ? published.stdout : null,
+  };
+}
+
+function commitSubjects(range, runDir) {
+  return git(["log", "--format=%s", "--reverse", range], { runDir }).split("\n").filter(Boolean);
+}
+
+function upstreamPullsLanded(stableTag, runDir) {
+  return UPSTREAM_PULLS.every((pull) => {
+    const [merged, sha] = gh(
+      [
+        "api",
+        `repos/${UPSTREAM_REPO}/pulls/${pull}`,
+        "--jq",
+        "[.merged, .merge_commit_sha] | @tsv",
+      ],
+      { runDir },
+    ).split("\t");
+    if (merged !== "true") return false;
+    return (
+      run("git", ["merge-base", "--is-ancestor", sha, stableTag], { quiet: true }).status === 0
+    );
+  });
+}
+
+/** The checks and the build run on the Node major upstream's own release workflow uses. */
+function nodeEnv(tag, runDir) {
+  const workflow = git(["show", `${tag}:.github/workflows/desktop-release.yml`], { runDir });
+  const major = nodeMajorFromWorkflow(workflow);
+  if (!major)
+    throw new StepFailure("node", "no node-version in upstream's desktop release workflow");
+  const bin = `/opt/homebrew/opt/node@${major}/bin`;
+  if (!existsSync(path.join(bin, "node"))) {
+    run("brew", ["install", `node@${major}`], { step: "node", runDir, timeoutMs: 20 * 60_000 });
+  }
+  return { PATH: `${bin}:${process.env.PATH}` };
+}
+
+function gate({ runDir, env }) {
+  const steps = [
+    ["npm-ci", "node", ["scripts/npm-retry.mjs", "ci"]],
+    // npm ci leaves electron/dist empty here; the build and its smoke test need the binary.
+    ["electron", "node", ["node_modules/electron/install.js"]],
+    // The browser the app's tests and the specs need, which moves with upstream's Playwright.
+    ["playwright", "npx", ["playwright", "install", "chromium"]],
+    ["release-tests", "node", ["--test", "fork/release.test.mjs"]],
+    ["format", "npm", ["run", "format:check"]],
+    ["lint", "npm", ["run", "lint"]],
+    ["build-server", "npm", ["run", "build:server"]],
+    ["typecheck", "npm", ["run", "typecheck"]],
+    ["app-deps", "npm", ["run", "build:app-deps"]],
+    ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app"]],
+    ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
+    ["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...FEATURE_SPECS]],
+  ];
+  for (const [step, command, args] of steps) {
+    const started = Date.now();
+    run(command, args, { step, runDir, env, stream: true, timeoutMs: 60 * 60_000 });
+    log(`  ${step} ok (${Math.round((Date.now() - started) / 1000)} s)`);
+  }
+}
+
+function checkScope(tag, runDir) {
+  const changed = git(["diff", "--name-only", tag, "HEAD"], { runDir }).split("\n").filter(Boolean);
+  const outside = pathsOutsideScope(changed);
+  if (outside.length > 0) {
+    throw new StepFailure(
+      "scope",
+      `the branch changes files outside the app: ${outside.join(", ")}`,
+    );
+  }
+}
+
+function buildDesktop({ version, runDir, env }) {
+  const owner = FORK_REPO.split("/")[0];
+  const packagePath = path.join(BUILD, "packages/desktop/package.json");
+  const original = readFileSync(packagePath, "utf8");
+  const releaseDir = path.join(BUILD, "packages/desktop/release");
+  rmSync(releaseDir, { recursive: true, force: true });
+  writeFileSync(packagePath, `${JSON.stringify({ ...JSON.parse(original), version }, null, 2)}\n`);
+  const started = Date.now();
+  try {
+    run(
+      "npm",
+      [
+        "run",
+        "build:desktop",
+        "--",
+        "--publish",
+        "never",
+        "--mac",
+        "--arm64",
+        "-c.publish.releaseType=release",
+        "-c.publish.channel=latest",
+        `-c.publish.owner=${owner}`,
+      ],
+      {
+        step: "build",
+        runDir,
+        stream: true,
+        timeoutMs: 120 * 60_000,
+        env: {
+          ...env,
+          APPLE_KEYCHAIN_PROFILE: NOTARY_PROFILE,
+          PASEO_DESKTOP_SMOKE: "1",
+          PASEO_DESKTOP_SMOKE_ARTIFACT_DIR: path.join(runDir, "smoke"),
+          NODE_OPTIONS: "--max-old-space-size=8192",
+        },
+      },
+    );
+  } finally {
+    writeFileSync(packagePath, original);
+  }
+  log(`  build ok (${Math.round((Date.now() - started) / 1000)} s)`);
+  return releaseDir;
+}
+
+/** The release is what electron-updater expects, signed, notarized and pointing at the fork. */
+function verifyRelease({ releaseDir, version, runDir }) {
+  const step = "verify";
+  const owner = FORK_REPO.split("/")[0];
+  const app = path.join(releaseDir, "mac-arm64", "Paseo.app");
+  run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", app], { step, runDir });
+  const assessment = run("spctl", ["--assess", "--type", "execute", "--verbose=4", app], {
+    step,
+    runDir,
+  });
+  if (!assessment.output.includes("Notarized Developer ID")) {
+    throw new StepFailure(step, `the app is not notarized: ${assessment.output}`);
+  }
+  run("xcrun", ["stapler", "validate", app], { step, runDir });
+  const plist = path.join(app, "Contents/Info.plist");
+  const bundleVersion = run("plutil", ["-extract", "CFBundleShortVersionString", "raw", plist], {
+    step,
+    runDir,
+  }).stdout;
+  if (bundleVersion !== version) {
+    throw new StepFailure(step, `the app says version ${bundleVersion}, expected ${version}`);
+  }
+  const feed = readFileSync(path.join(app, "Contents/Resources/app-update.yml"), "utf8");
+  if (!new RegExp(`^owner: ${owner}$`, "m").test(feed) || !/^channel: latest$/m.test(feed)) {
+    throw new StepFailure(step, `the app's update feed is not ${owner}, channel latest:\n${feed}`);
+  }
+  const files = [
+    `Paseo-${version}-arm64.dmg`,
+    `Paseo-${version}-arm64.dmg.blockmap`,
+    `Paseo-${version}-arm64.zip`,
+    `Paseo-${version}-arm64.zip.blockmap`,
+    "latest-mac.yml",
+  ];
+  const present = new Set(readdirSync(releaseDir));
+  const missing = files.filter((name) => !present.has(name));
+  if (missing.length > 0)
+    throw new StepFailure(step, `missing release files: ${missing.join(", ")}`);
+  const manifestPath = path.join(releaseDir, "latest-mac.yml");
+  if (!readFileSync(manifestPath, "utf8").split("\n").includes(`version: ${version}`)) {
+    throw new StepFailure(step, `latest-mac.yml does not name version ${version}`);
+  }
+  // Upstream's merge step adds the macOS minimum the updater checks; with one architecture it
+  // merges the manifest with itself.
+  run("node", ["scripts/merge-mac-manifest.mjs", manifestPath, manifestPath, manifestPath], {
+    step,
+    runDir,
+  });
+  // No staged rollout on the fork: the app takes the update at its next check.
+  const releaseDate = now();
+  const stampArgs = ["--release-date", releaseDate, "--rollout-hours", "0", manifestPath];
+  run("node", ["scripts/stamp-rollout.mjs", ...stampArgs], { step, runDir });
+  run("node", ["scripts/validate-desktop-manifests.mjs", ...stampArgs], { step, runDir });
+  return files.map((name) => path.join(releaseDir, name));
+}
+
+function publish({ version, target, files, notes, runDir }) {
+  const step = "publish";
+  const notesFile = path.join(runDir, "notes.md");
+  writeFileSync(notesFile, notes);
+  const repo = ["--repo", FORK_REPO];
+  run(
+    "gh",
+    [
+      "release",
+      "create",
+      version,
+      ...repo,
+      "--target",
+      target,
+      "--title",
+      `Paseo ${version}`,
+      "--notes-file",
+      notesFile,
+      "--draft",
+    ],
+    { step, runDir },
+  );
+  run("gh", ["release", "upload", version, ...files, ...repo, "--clobber"], {
+    step,
+    runDir,
+    timeoutMs: 30 * 60_000,
+  });
+  run("gh", ["release", "edit", version, ...repo, "--draft=false", "--latest"], { step, runDir });
+  // GitHub's latest release settles a few seconds after the edit.
+  let latest = "";
+  for (let attempt = 0; attempt < 6 && latest !== version; attempt += 1) {
+    if (attempt > 0) spawnSync("sleep", ["10"]);
+    latest = run("gh", ["api", `repos/${FORK_REPO}/releases/latest`, "--jq", ".tag_name"], {
+      step,
+      runDir,
+      quiet: true,
+    }).stdout;
+  }
+  if (latest !== version)
+    throw new StepFailure(step, `the fork's latest release is ${latest}, not ${version}`);
+}
+
+function releaseNotes({ upstreamTag, features }) {
+  const upstream = `[${upstreamTag}](https://github.com/${UPSTREAM_REPO}/releases/tag/${upstreamTag})`;
+  const list = features.map((subject) => `- ${subject}`).join("\n");
+  return `Upstream Paseo ${upstream} plus:\n\n${list}\n\nBuilt, signed and notarized on sincoder by fork/release.mjs. The Mac app updates itself from this repository's releases.\n`;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Deliver a notice through Alma's door on sin0; false when sin0 could not take it. The door
+ * keeps one note per key and day and drops bare numbers from it, so the key carries the
+ * branch head to keep two releases' notices apart.
+ */
+function notify({ level, title, body, key }) {
+  const remote = `${NOTIFY_COMMAND} deliver --source paseo-fork --level ${level} --title ${shellQuote(title)} --key ${shellQuote(key)}`;
+  const result = spawnSync(
+    "ssh",
+    ["-o", "BatchMode=yes", "-o", "ConnectTimeout=20", SIN0, remote],
+    {
+      input: body,
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+  if (result.status !== 0)
+    log(`notice not delivered (exit ${result.status}): ${result.stderr?.trim()}`);
+  return result.status === 0;
+}
+
+function tail(file, lines = 40) {
+  if (!file || !existsSync(file)) return "";
+  return readFileSync(file, "utf8").trimEnd().split("\n").slice(-lines).join("\n");
+}
+
+function conflictPrompt({ commit, oldBase, newBase, files }) {
+  return `You are resolving a git rebase conflict in a fork of Paseo (${FORK_REPO}).
+The fork's release branch is upstream's stable tag plus a few commits of its own. They are being replayed from ${oldBase} onto upstream's new stable tag ${newBase}, and commit ${commit} stopped on conflicts in:
+${files.map((file) => `- ${file}`).join("\n")}
+
+Read the commit (git show REBASE_HEAD), what upstream changed in those files (git log -p ${oldBase}..${newBase} -- <file>), and the conflicted files. Resolve every conflict so the commit does what it did before, written against upstream's new code. Keep upstream's changes; adapt the commit, not upstream. Remove every conflict marker and git add each resolved file.
+
+Do not commit, do not run git rebase, do not install packages, build or run tests, and do not edit other files unless the commit needs it. The job runs typecheck, lint and the tests after you.
+
+End your reply with one line: RESOLVED, or CANNOT: <one sentence why>.`;
+}
+
+function withProxyTunnel(runDir, body) {
+  // One socket path, so a tunnel a dead run left behind is closed before this one opens.
+  const socket = path.join(ROOT, "tunnel.sock");
+  const step = "conflict-agent";
+  run("ssh", ["-S", socket, "-O", "exit", SIN0], { step, runDir, quiet: true });
+  const forward = `${PROXY_PORT}:127.0.0.1:8318`;
+  const options = ["-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", forward];
+  run("ssh", ["-M", "-S", socket, "-fN", ...options, SIN0], { step, runDir, timeoutMs: 60_000 });
+  try {
+    return body();
+  } finally {
+    run("ssh", ["-S", socket, "-O", "exit", SIN0], { step, runDir, quiet: true });
+  }
+}
+
+function unmergedFiles(runDir) {
+  return git(["diff", "--name-only", "--diff-filter=U"], { runDir }).split("\n").filter(Boolean);
+}
+
+/** One headless agent attempt per conflicting stop of the rebase; false leaves it to Tim. */
+function resolveConflicts({ oldBase, newBase, runDir }) {
+  const configDir = path.join(ROOT, "agent-config");
+  mkdirSync(configDir, { recursive: true });
+  return withProxyTunnel(runDir, () => {
+    for (let stop = 0; stop < 5 && rebaseInProgress(); stop += 1) {
+      const files = unmergedFiles(runDir);
+      if (files.length === 0) return false;
+      const commit = git(["rev-parse", "--short", "REBASE_HEAD"], { runDir });
+      log(`  conflict agent on ${commit}: ${files.join(", ")}`);
+      const reply = run(
+        "claude",
+        [
+          "-p",
+          conflictPrompt({ commit, oldBase, newBase, files }),
+          "--model",
+          AGENT_MODEL,
+          "--permission-mode",
+          "acceptEdits",
+          "--allowedTools",
+          "Read,Edit,Write,Glob,Grep,Bash(git show:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git add:*)",
+        ],
+        {
+          step: "conflict-agent",
+          runDir,
+          quiet: true,
+          timeoutMs: 40 * 60_000,
+          env: {
+            CLAUDE_CONFIG_DIR: configDir,
+            ANTHROPIC_BASE_URL: `http://127.0.0.1:${PROXY_PORT}`,
+            ANTHROPIC_AUTH_TOKEN: "vibeproxy-dummy",
+            ANTHROPIC_API_KEY: "",
+          },
+        },
+      );
+      const markers = run("git", ["grep", "-l", "-E", "^(<<<<<<<|>>>>>>>) ", "--", ...files], {
+        runDir,
+        quiet: true,
+      }).stdout;
+      if (reply.status !== 0 || !/RESOLVED\s*$/.test(reply.stdout) || markers) return false;
+      git(["add", "--", ...files], { runDir });
+      run("git", ["rebase", "--continue"], {
+        step: "rebase",
+        runDir,
+        quiet: true,
+        env: { GIT_EDITOR: "true" },
+      });
+    }
+    return !rebaseInProgress();
+  });
+}
+
+function rebaseOnto({ newBase, oldBase, head, runDir }) {
+  git(["checkout", "-q", "-f", "--detach", head], { runDir });
+  const rebase = ["rebase", "--onto", newBase, oldBase];
+  if (run("git", rebase, { step: "rebase", runDir, quiet: true }).status === 0) {
+    return { resolvedBy: null };
+  }
+  if (resolveConflicts({ oldBase, newBase, runDir })) return { resolvedBy: "agent" };
+  // Read where the rebase stopped last, which is not the first stop when the agent got further.
+  const files = rebaseInProgress() ? unmergedFiles(runDir) : [];
+  const diff = run("git", ["diff"], { runDir, quiet: true }).stdout.slice(0, 6000);
+  if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
+  return { conflict: { files, diff } };
+}
+
+function pruneRuns() {
+  const runs = readdirSync(RUNS).sort();
+  for (const old of runs.slice(0, Math.max(0, runs.length - KEEP_RUNS))) {
+    rmSync(path.join(RUNS, old), { recursive: true, force: true });
+  }
+}
+
+function retireLaunchAgent() {
+  const plist = path.join(os.homedir(), "Library/LaunchAgents", `${LABEL}.plist`);
+  if (existsSync(plist)) renameSync(plist, `${plist}.retired-${now().slice(0, 10)}`);
+}
+
+function release({ ctx, options, env, runDir, features }) {
+  // A draft is what an earlier run of this job left when it died mid-publish.
+  const ours = (entry) => /-fork\.\d+$/.test(entry.tag);
+  if (!options.dryRun) {
+    for (const draft of forkReleases(runDir).filter((entry) => entry.draft && ours(entry))) {
+      gh(["api", "-X", "DELETE", `repos/${FORK_REPO}/releases/${draft.id}`], { runDir });
+    }
+  }
+  const tags = forkReleases(runDir).map((entry) => entry.tag);
+  ctx.version = forkVersion(ctx.latestTag, nextForkNumber(ctx.latestTag, tags));
+  log(`  building ${ctx.version}`);
+  const releaseDir = buildDesktop({ version: ctx.version, runDir, env });
+  const files = verifyRelease({ releaseDir, version: ctx.version, runDir });
+  log(`  signed, notarized and verified ${ctx.version}`);
+  if (options.dryRun) {
+    log(`  dry run, not published: ${releaseDir}`);
+    return;
+  }
+  // The release's commit has to be on the fork before GitHub can tag it.
+  const target = git(["rev-parse", "HEAD"], { runDir });
+  if (target !== ctx.head) {
+    const lease = `--force-with-lease=${options.branch}:${ctx.head}`;
+    git(["push", lease, "origin", `HEAD:refs/heads/${options.branch}`], { runDir });
+  }
+  publish({
+    version: ctx.version,
+    target,
+    files,
+    notes: releaseNotes({ upstreamTag: ctx.latestTag, features }),
+    runDir,
+  });
+  ctx.publishedCommit = target;
+  log(`  published https://github.com/${FORK_REPO}/releases/tag/${ctx.version}`);
+}
+
+/**
+ * Upstream carries the fork's features. The app cannot follow on its own: macOS's updater
+ * takes only a build signed by the team that signed the running app, and upstream signs with
+ * its own. So the job stops and says that going back to stock Paseo is one hand install.
+ */
+function retire(reason) {
+  log(`  ${reason}: retiring`);
+  return "retired";
+}
+
+function work({ ctx, options, plan, runDir }) {
+  // A run that died mid-rebase leaves it in progress; the next one starts clean.
+  if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
+  if (plan === "rebase" && upstreamPullsLanded(ctx.latestTag, runDir)) {
+    return retire(`upstream ${ctx.latestTag} carries the fork's pulls`);
+  }
+  if (plan === "rebase") {
+    const rebased = rebaseOnto({
+      newBase: ctx.latestTag,
+      oldBase: ctx.baseTag,
+      head: ctx.head,
+      runDir,
+    });
+    if (rebased.conflict) {
+      ctx.conflict = rebased.conflict;
+      return "conflict";
+    }
+    ctx.resolvedBy = rebased.resolvedBy;
+  } else {
+    git(["checkout", "-q", "-f", "--detach", ctx.head], { runDir });
+  }
+  const features = featureSubjects(commitSubjects(`${ctx.latestTag}..HEAD`, runDir));
+  if (features.length === 0 && plan !== "rebase") {
+    throw new StepFailure("branch", `${options.branch} has no feature commit on ${ctx.latestTag}`);
+  }
+  if (features.length === 0) {
+    // The rebase dropped every feature commit as already upstream: the same as a merged pull.
+    return retire(`no feature commit left on ${ctx.latestTag}`);
+  }
+  checkScope(ctx.latestTag, runDir);
+  const env = nodeEnv(ctx.latestTag, runDir);
+  gate({ runDir, env });
+  release({ ctx, options, env, runDir, features });
+  return "published";
+}
+
+/** Record the run and tell Tim what needs him: a failure, a conflict, a retirement. */
+function settle({ outcome, error, ctx, state, runDir }) {
+  const stamp = now();
+  const next = { ...state, lastCheckAt: stamp, latestUpstream: ctx.latestTag };
+  const previous = state.lastPublished?.version ?? "no fork release yet";
+  if (outcome === "published") {
+    next.lastOkAt = stamp;
+    next.lastPublished = {
+      version: ctx.version,
+      commit: ctx.publishedCommit,
+      upstreamTag: ctx.latestTag,
+      at: stamp,
+    };
+    delete next.failure;
+    if (ctx.resolvedBy) {
+      next.pendingNotice = {
+        level: "info",
+        key: `conflict resolved ${ctx.publishedCommit}`,
+        title: `Paseo fork ${ctx.version}: an upstream conflict was resolved`,
+        body: `Upstream ${ctx.latestTag} conflicted with the fork's commits. The conflict agent resolved it and every check passed before ${ctx.version} was published.\n\nRun log: ${runDir} on sincoder.\n`,
+      };
+    }
+    log(`published ${ctx.version}`);
+  } else if (outcome === "retired") {
+    next.lastOkAt = stamp;
+    next.retired = { upstreamTag: ctx.latestTag, at: stamp };
+    delete next.failure;
+    retireLaunchAgent();
+    const stock = `https://github.com/${UPSTREAM_REPO}/releases/tag/${ctx.latestTag}`;
+    next.pendingNotice = {
+      level: "info",
+      key: `retired ${ctx.latestTag}`,
+      title: `Quote is in upstream Paseo ${ctx.latestTag}: the fork job stopped`,
+      body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add and its release job on sincoder has stopped. Your app stays on ${previous} and gets no more updates.\n\nGoing back to stock Paseo is one hand install: macOS lets an app update itself only to a build signed by the same developer, and upstream signs with its own. Download the arm64 dmg from ${stock} and replace /Applications/Paseo.app (the daemon and your chats keep running), or ask Alma to swap it.\n`,
+    };
+    log(`retired on ${ctx.latestTag}`);
+  } else {
+    const failure =
+      state.failure?.candidate === ctx.candidate
+        ? { ...state.failure }
+        : { candidate: ctx.candidate, attempts: 0 };
+    failure.attempts += 1;
+    failure.at = stamp;
+    let title;
+    let body;
+    if (outcome === "conflict") {
+      failure.step = "rebase";
+      title = `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`;
+      const where = ctx.conflict.files.length
+        ? `conflicted in ${ctx.conflict.files.join(", ")}`
+        : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
+      body = `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not resolve it. The app stays on ${previous}.\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`;
+    } else {
+      failure.step = error.step ?? "job";
+      title = `Paseo fork release failed at ${failure.step} (upstream ${ctx.latestTag})`;
+      body = `${error.message}\n\nThe app stays on ${previous}. This was attempt ${failure.attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${ctx.head.slice(0, 9)}; after that the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`;
+    }
+    next.failure = failure;
+    if (failure.attempts === 1 || failure.attempts === MAX_ATTEMPTS) {
+      const round = failure.attempts === 1 ? "first" : "last";
+      next.pendingNotice = {
+        level: "warn",
+        title,
+        body,
+        key: `${failure.step} ${ctx.head} ${round}`,
+      };
+    }
+    log(`${outcome}: ${title}`);
+  }
+  if (next.pendingNotice && notify(next.pendingNotice)) delete next.pendingNotice;
+  writeState(next);
+  return outcome === "published" || outcome === "retired" ? 0 : 1;
+}
+
+function flushPendingNotice(state) {
+  if (state.pendingNotice && notify(state.pendingNotice)) {
+    delete state.pendingNotice;
+    writeState(state);
+  }
+}
+
+/** One run past the lock: poll, decide, and do the work if there is any. */
+function runOnce(options, state) {
+  if (!existsSync(path.join(BUILD, ".git"))) {
+    log(`no build clone at ${BUILD}; run fork/install.sh`);
+    return 1;
+  }
+  const runDir = path.join(RUNS, now().replaceAll(":", "-"));
+  mkdirSync(runDir, { recursive: true });
+  let ctx;
+  try {
+    ctx = poll(options, runDir);
+  } catch (error) {
+    // GitHub or the network. No state change: sin0's dead-man probe speaks if it lasts.
+    log(`could not poll: ${error.message}`);
+    return 1;
+  }
+  ctx.candidate = `${ctx.latestTag}@${ctx.head}`;
+  const decided = decide(ctx);
+  const plan = options.force && decided === "current" ? "release" : decided;
+  const skip = !options.dryRun && shouldSkipCandidate(state.failure, ctx.candidate);
+  if (plan === "current" || skip) {
+    rmSync(runDir, { recursive: true, force: true });
+    if (skip) log(`${ctx.candidate} failed ${MAX_ATTEMPTS} runs; waiting for a change`);
+    if (!options.dryRun)
+      writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
+    return 0;
+  }
+  log(
+    plan === "rebase"
+      ? `upstream ${ctx.latestTag} is out; the branch is on ${ctx.baseTag}`
+      : `branch ${ctx.head.slice(0, 9)} on ${ctx.baseTag} has no release yet`,
+  );
+  pruneRuns();
+  let outcome;
+  let failure = null;
+  try {
+    outcome = work({ ctx, options, plan, runDir });
+  } catch (error) {
+    outcome = "failed";
+    failure =
+      error instanceof StepFailure ? error : new StepFailure("job", error.stack ?? String(error));
+  }
+  if (options.dryRun) {
+    log(`dry run: ${outcome}${failure ? ` at ${failure.step}: ${failure.message}` : ""}`);
+    return outcome === "published" || outcome === "retired" ? 0 : 1;
+  }
+  return settle({ outcome, error: failure, ctx, state, runDir });
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  mkdirSync(RUNS, { recursive: true });
+  if (!acquireLock()) {
+    log("an earlier run is still going");
+    return 0;
+  }
+  try {
+    const state = readState();
+    // A notice sin0 could not take goes out first, a retired job's last one included.
+    if (!options.dryRun) flushPendingNotice(state);
+    if (state.retired) {
+      log(`retired on ${state.retired.upstreamTag}; nothing to do`);
+      return 0;
+    }
+    return runOnce(options, state);
+  } catch (error) {
+    log(`failed: ${error.stack ?? error}`);
+    return 1;
+  } finally {
+    unlinkSync(LOCK_FILE);
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main();
+}
