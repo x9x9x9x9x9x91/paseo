@@ -12,7 +12,11 @@ Commits that belong to the fork itself (the feed, this job) start with `fork: `.
 
 A fork release is the upstream version plus `-fork.N`: `0.11.4-fork.1`, then `0.11.4-fork.2` when a commit lands on `fork/release` before upstream's next release, then `0.11.5-fork.1`. The tag and the GitHub release carry the same name, without a `v`, so upstream's release workflows (triggered by `v*` tags) never match it.
 
-Semver reads `0.11.4-fork.1` newer than every older upstream release and every earlier fork build, so the app updates; the app keeps the stock `latest` channel. Electron's updater on macOS takes only a build signed by the same team as the running app, so a fork app updates from the fork's releases and never from upstream's, and the reverse. The renderer reads its version from `packages/app`, which stays upstream's, so the app/daemon version check compares `0.11.4` with the daemon's `0.11.4`.
+Semver reads `0.11.4-fork.1` newer than every older upstream release and every earlier fork build, so the app updates; the app keeps the stock `latest` channel. The renderer reads its version from `packages/app`, which stays upstream's, so the app/daemon version check compares `0.11.4` with the daemon's `0.11.4`.
+
+## Signing
+
+Electron's updater on macOS installs a build only when it satisfies the running app's designated requirement, which by default names the one team that signed the app: a stock app (signed by upstream's team, `99ZMJMKU9Y`) never takes a fork build. The job signs through `sign-mac.cjs`, which gives the fork app a designated requirement naming Paseo's identifier `sh.paseo.desktop` and either team, the fork's `HKM8HFGKC6` or upstream's, so a fork app could take stock Paseo; the helpers inside keep their own requirements. What it takes is still only what its feed offers, and the fork's feed offers fork builds until the handover below. Pinned to the identifier, the requirement admits no other app from either team. The job's verify step refuses a build whose requirement is not this one, and codesign refuses one that does not satisfy its own.
 
 ## The job
 
@@ -27,8 +31,8 @@ A run asks GitHub for upstream's latest release (published, not a prerelease), t
 
 It publishes only when every step passed. A failure keeps the previous release and goes to Tim's notifications on sin0 through Alma's door, as source `paseo-fork`; the same upstream release and branch are retried for three runs, then the job waits for a new upstream release or a new commit. Every run copies `state.json` to sin0, where Alma's sched_watch warns when the job has not checked upstream for 12 hours, sincoder being down included.
 
-Run it by hand on sincoder through `~/bin/gui-run.sh` so it gets the session's keychain. `--dry-run` builds, signs, notarizes and verifies without pushing, publishing or notifying; `--branch <name>` builds another branch of the fork and `--force` builds a branch that is already released, both with `--dry-run` only.
+Run it by hand on sincoder through `~/bin/gui-run.sh` so it gets the session's keychain. `--dry-run` builds, signs, notarizes and verifies without pushing, publishing or notifying; `--branch <name>` builds another branch of the fork, `--force` builds a branch that is already released and `--retire` builds the handover below from upstream's latest release, all three with `--dry-run` only.
 
 ## Retirement
 
-When upstream merges the feature, the fork stops. A run retires when every pull in `UPSTREAM_PULLS` is merged into the new stable release, or when the rebase drops every feature commit as already upstream. It renames its launch agent so it does not load again and tells Tim. The app stays on the last fork release; because of the signing rule above it cannot update itself to stock Paseo, so going back is one hand install of upstream's dmg over `/Applications/Paseo.app`, which leaves the daemon and its agents running.
+When upstream merges the feature, the fork hands the app back and stops. A run retires when every pull in `UPSTREAM_PULLS` is merged into the new stable release, or when the rebase drops every feature commit as already upstream. It then builds upstream's tag as it is, with upstream's update feed, signs it as above, numbers it like any fork release (`0.12.0-fork.1` on upstream `v0.12.0`) and publishes it as the fork's last release, its tag on upstream's commit. A fork app takes it because the fork signed it; that build then finds stock `0.12.0` on upstream's releases, newer than `0.12.0-fork.1`, and takes it because its requirement names upstream's team. Two updates, no hand install, and the daemon and its agents keep running. The job renames its launch agent so it does not load again and tells Tim; a failed handover is retried like any release.
