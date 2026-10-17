@@ -9,8 +9,10 @@ import {
   nodeMajorFromWorkflow,
   parseStableTag,
   pathsOutsideScope,
+  sameRequirement,
   shouldSkipCandidate,
 } from "./release.mjs";
+import { designatedRequirement } from "./sign-mac.cjs";
 
 test("only plain vX.Y.Z tags are stable", () => {
   assert.deepEqual(parseStableTag("v0.11.4"), [0, 11, 4]);
@@ -85,4 +87,23 @@ test("the Node major comes from upstream's release workflow", () => {
   );
   assert.equal(nodeMajorFromWorkflow("node-version: 24.1"), 24);
   assert.equal(nodeMajorFromWorkflow("no node here"), null);
+});
+
+test("the app's requirement takes Paseo's identifier from either team", () => {
+  assert.equal(
+    designatedRequirement("sh.paseo.desktop"),
+    'designated => identifier "sh.paseo.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and (certificate leaf[subject.OU] = "HKM8HFGKC6" or certificate leaf[subject.OU] = "99ZMJMKU9Y")',
+  );
+});
+
+test("the verify step reads the requirement the way codesign prints it", () => {
+  // codesign -d -r- on a binary signed with designatedRequirement("sh.paseo.desktop")
+  const printed =
+    'designated => identifier "sh.paseo.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and (certificate leaf[subject.OU] = HKM8HFGKC6 or certificate leaf[subject.OU] = "99ZMJMKU9Y")';
+  assert.ok(sameRequirement(printed, designatedRequirement("sh.paseo.desktop")));
+  // the default requirement a fork build had before: the fork's team only
+  const forkOnly =
+    'designated => identifier "sh.paseo.desktop" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = HKM8HFGKC6';
+  assert.equal(sameRequirement(forkOnly, designatedRequirement("sh.paseo.desktop")), false);
+  assert.equal(sameRequirement(printed, designatedRequirement("sh.paseo.desktop.helper")), false);
 });
