@@ -324,18 +324,15 @@ function poll(options, runDir) {
   );
   const published = run(
     "gh",
-    ["api", `repos/${FORK_REPO}/releases/latest`, "--jq", ".target_commitish"],
+    ["api", `repos/${FORK_REPO}/releases/latest`, "--jq", "[.target_commitish, .tag_name] | @tsv"],
     {
       runDir,
       quiet: true,
     },
   );
-  return {
-    latestTag,
-    head,
-    baseTag,
-    publishedCommit: published.status === 0 ? published.stdout : null,
-  };
+  const [publishedCommit = null, publishedVersion = null] =
+    published.status === 0 ? published.stdout.split("\t") : [];
+  return { latestTag, head, baseTag, publishedCommit, publishedVersion };
 }
 
 function commitSubjects(range, runDir) {
@@ -752,8 +749,9 @@ function release({ ctx, options, env, runDir, features, handover = false }) {
   const target = git(["rev-parse", "HEAD"], { runDir });
   if (handover) {
     // Upstream's tagged commit need not be on any fork branch; the release's own tag carries
-    // it there, and the branch stays where its last feature release left it.
-    git(["push", "origin", `${target}:refs/tags/${ctx.version}`], { runDir });
+    // it there, and the branch stays where its last feature release left it. Forced, because
+    // a run that died before creating the release can have left the tag on an older commit.
+    git(["push", "--force", "origin", `${target}:refs/tags/${ctx.version}`], { runDir });
   } else if (target !== ctx.head) {
     const lease = `--force-with-lease=${options.branch}:${ctx.head}`;
     git(["push", lease, "origin", `HEAD:refs/heads/${options.branch}`], { runDir });
@@ -778,6 +776,14 @@ function release({ ctx, options, env, runDir, features, handover = false }) {
  * names upstream's team too (sign-mac.cjs). Upstream's release workflow already checked the tag.
  */
 function retire({ ctx, options, runDir, reason }) {
+  // A feature release always targets a commit on top of upstream's, so a latest release on
+  // upstream's own commit is a handover an earlier run published without recording it.
+  const upstreamCommit = git(["rev-parse", `${ctx.latestTag}^{commit}`], { runDir });
+  if (!options.retire && ctx.publishedCommit === upstreamCommit) {
+    ctx.version = ctx.publishedVersion;
+    log(`  ${reason}: the handover ${ctx.version} is already out`);
+    return "retired";
+  }
   log(`  ${reason}: handing the app back to upstream`);
   git(["checkout", "-q", "-f", "--detach", ctx.latestTag], { runDir });
   const env = nodeEnv(ctx.latestTag, runDir);
@@ -938,11 +944,10 @@ function runOnce(options, state) {
       writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
     return 0;
   }
-  log(
-    plan === "rebase"
-      ? `upstream ${ctx.latestTag} is out; the branch is on ${ctx.baseTag}`
-      : `branch ${ctx.head.slice(0, 9)} on ${ctx.baseTag} has no release yet`,
-  );
+  if (options.retire) log(`rehearsing the handover on upstream ${ctx.latestTag}`);
+  else if (plan === "rebase")
+    log(`upstream ${ctx.latestTag} is out; the branch is on ${ctx.baseTag}`);
+  else log(`branch ${ctx.head.slice(0, 9)} on ${ctx.baseTag} has no release yet`);
   pruneRuns();
   let outcome;
   let failure = null;
