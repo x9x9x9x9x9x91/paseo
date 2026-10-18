@@ -83,11 +83,12 @@ const AGENT_MODEL = "claude-opus-5-5";
 // A candidate that failed this many runs waits for a new upstream release or a new commit on
 // the branch instead of rebuilding every hour.
 const MAX_ATTEMPTS = 3;
-const FEATURE_SPECS = [
-  "e2e/browser/assistant-selection-quote.spec.ts",
-  "e2e/browser/assistant-selection-copy.spec.ts",
-  "e2e/browser/attention-projects.spec.ts",
-];
+// The features' browser specs are the ones the branch adds or changes against upstream's tag,
+// read from the branch each run, so no rebase or hand edit can leave a feature's spec out of
+// the gate. A `.real.spec.ts` needs a real provider and is not in the browser project.
+const APP_DIR = "packages/app/";
+const BROWSER_SPEC = /^packages\/app\/e2e\/browser\/.+\.spec\.ts$/;
+const REAL_SPEC = /\.real\.spec\.ts$/;
 
 const ROOT = process.env.PASEO_FORK_ROOT ?? path.join(os.homedir(), "Coding/_forks/paseo-release");
 const BUILD = path.join(ROOT, "build");
@@ -456,7 +457,7 @@ function runSteps(steps, { runDir, env }) {
   }
 }
 
-function gate({ runDir, env }) {
+function gate({ runDir, env, specs }) {
   const steps = [
     ...PREPARE_STEPS,
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
@@ -474,9 +475,23 @@ function gate({ runDir, env }) {
       ["run", "test:unit", "--workspace=@getpaseo/server", "--", ...DAEMON_PATCH_TESTS],
     ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
-    ["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...FEATURE_SPECS]],
   ];
+  // Without a spec named, the step would run every one of upstream's.
+  if (specs.length > 0) {
+    steps.push(["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...specs]]);
+  } else {
+    log("  e2e skipped: no feature adds or changes a browser spec");
+  }
   runSteps(steps, { runDir, env });
+}
+
+/** The app's browser specs the branch adds or changes against `tag`, as the e2e step names them. */
+export function branchSpecs(tag, { runDir, cwd } = {}) {
+  const changed = git(["diff", "--name-only", "--diff-filter=d", tag, "HEAD"], { runDir, cwd });
+  return changed
+    .split("\n")
+    .filter((file) => BROWSER_SPEC.test(file) && !REAL_SPEC.test(file))
+    .map((file) => file.slice(APP_DIR.length));
 }
 
 function checkScope(tag, runDir) {
@@ -921,7 +936,7 @@ function work({ ctx, options, plan, runDir }) {
   }
   checkScope(ctx.latestTag, runDir);
   const env = nodeEnv(ctx.latestTag, runDir);
-  gate({ runDir, env });
+  gate({ runDir, env, specs: branchSpecs(ctx.latestTag, { runDir }) });
   release({ ctx, options, env, runDir, features });
   return "published";
 }
