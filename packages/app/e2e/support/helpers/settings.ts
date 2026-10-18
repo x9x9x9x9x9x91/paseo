@@ -66,6 +66,7 @@ const SECTION_LABELS = {
   browser: "Browser",
   shortcuts: "Shortcuts",
   integrations: "Integrations",
+  notifications: "Notifications",
   permissions: "Permissions",
   diagnostics: "Diagnostics",
   about: "About",
