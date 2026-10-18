@@ -75,6 +75,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
 import { DesktopNotificationsSection } from "@/desktop/components/desktop-notifications-section";
+import { AttentionProjectsSection } from "@/screens/settings/attention-projects-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
 import { IntegrationsSection } from "@/desktop/components/integrations-section";
 import { isElectronRuntime } from "@/desktop/host";
@@ -184,7 +185,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     id: "notifications",
     labelKey: "settings.sections.notifications",
     icon: Bell,
-    desktopOnly: true,
+    webOnly: true,
   },
   { id: "about", labelKey: "settings.sections.about", icon: Info },
 ];
@@ -1544,10 +1545,12 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
             </>
           );
         case "notifications":
+          // The desktop parts render nothing in a browser, where the projects choice still drives banners.
           return (
             <>
               <DesktopNotificationsSection />
               {isDesktopApp ? <DesktopPermissionsSection /> : null}
+              <AttentionProjectsSection />
             </>
           );
         case "about":

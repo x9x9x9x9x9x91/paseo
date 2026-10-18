@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
 import { useAllDirectoryDemand } from "./use-directory-demand";
 import { getDesktopHost } from "@/desktop/host";
+import { useAppSettings } from "@/hooks/use-settings";
 import { createMacDockBadgeCountSelector } from "@/utils/desktop-badge-state";
 import { createFaviconStatusSelector, type FaviconStatus } from "@/utils/favicon-status";
 import { isNative } from "@/constants/platform";
@@ -88,13 +89,17 @@ export function useFaviconStatus() {
   useAllDirectoryDemand({ serverIds, enabled: !isNative });
   // Background workspaces count exactly when the sidebar shows them.
   const showBackground = useSidebarViewStore((state) => state.showBackground);
+  const { settings } = useAppSettings();
+  const attentionProjects = settings.attentionProjects;
   const selectFaviconStatus = useMemo(
     () => createFaviconStatusSelector({ showBackground }),
     [showBackground],
   );
+  // The favicon follows every project; only the dock badge and OS banners follow the projects
+  // choice.
   const selectMacDockBadgeCount = useMemo(
-    () => createMacDockBadgeCountSelector({ showBackground }),
-    [showBackground],
+    () => createMacDockBadgeCountSelector({ showBackground, attentionProjects }),
+    [showBackground, attentionProjects],
   );
   const status = useSessionStore(selectFaviconStatus);
   const dockBadgeCount = useSessionStore(selectMacDockBadgeCount);
