@@ -32,9 +32,36 @@ export const UPSTREAM_PULLS = [7176];
 // The fork's own commits (the update feed, this job) say so in their subject; every other
 // commit on the branch is a feature upstream does not have yet.
 const FORK_SUBJECT = /^fork: /;
-// A fork release changes the app and the build config only. The daemon, the CLI and every
-// other package stay upstream's source of the same tag, lockfile included.
+// A feature with no upstream pull says `Upstream: none` in its message. Upstream merging the
+// fork's pulls does not retire the fork while one is on the branch: the handover would drop it.
+const UPSTREAM_TRAILER = "Upstream";
+// The daemon files the fork patches: a chat on a custom provider (zero retention) has its
+// workspace named and its commit text written on that provider only. Their tests run in the gate.
+const DAEMON_PATCH_FILES = [
+  "packages/protocol/src/messages.ts",
+  "packages/server/src/server/agent/create-agent/create.ts",
+  "packages/server/src/server/agent/structured-generation-providers.ts",
+  "packages/server/src/server/agent/tools/paseo-tools.ts",
+  "packages/server/src/server/schedule/service.ts",
+  "packages/server/src/server/session.ts",
+  "packages/server/src/server/session/checkout/git-metadata-generator.ts",
+  "packages/server/src/server/worktree-branch-name-generator.ts",
+];
+const DAEMON_PATCH_TESTS = [
+  "src/server/agent/mcp-server.test.ts",
+  "src/server/agent/structured-generation-providers.test.ts",
+  "src/server/session/checkout/git-metadata-generator.test.ts",
+  "src/server/session.workspaces.test.ts",
+  "src/server/worktree-branch-name-generator.test.ts",
+];
+// A fork release changes the app, the build config and the daemon patch's files only. The
+// rest of the daemon, the CLI and every other package stay upstream's source of the same tag,
+// lockfile included.
 const ALLOWED_PATHS = [/^packages\/app\//, /^packages\/desktop\/electron-builder\.yml$/, /^fork\//];
+const DAEMON_PATCH_PATHS = new Set([
+  ...DAEMON_PATCH_FILES,
+  ...DAEMON_PATCH_TESTS.map((file) => `packages/server/${file}`),
+]);
 const LABEL = "com.alma.paseo-fork-release";
 // electron-builder signs through this hook, which lets the app accept upstream's signature too.
 const SIGN_HOOK = fileURLToPath(new URL("./sign-mac.cjs", import.meta.url));
@@ -104,11 +131,21 @@ export function nextForkNumber(upstreamTag, releaseTags) {
 }
 
 export function pathsOutsideScope(paths) {
-  return paths.filter((file) => !ALLOWED_PATHS.some((pattern) => pattern.test(file)));
+  return paths.filter(
+    (file) => !DAEMON_PATCH_PATHS.has(file) && !ALLOWED_PATHS.some((pattern) => pattern.test(file)),
+  );
 }
 
 export function featureSubjects(subjects) {
   return subjects.filter((subject) => !FORK_SUBJECT.test(subject));
+}
+
+/** Subjects of the commits whose `Upstream` trailer is `none`, from `subject\tvalue` lines. */
+export function forkOnlySubjects(lines) {
+  return lines
+    .map((line) => line.split("\t"))
+    .filter(([, upstream]) => upstream?.trim().toLowerCase() === "none")
+    .map(([subject]) => subject);
 }
 
 /**
@@ -339,6 +376,12 @@ function commitSubjects(range, runDir) {
   return git(["log", "--format=%s", "--reverse", range], { runDir }).split("\n").filter(Boolean);
 }
 
+function forkOnlyCommits(range, runDir) {
+  const format = `%s%x09%(trailers:key=${UPSTREAM_TRAILER},valueonly,separator=%x2C)`;
+  const lines = git(["log", `--format=${format}`, "--reverse", range], { runDir });
+  return forkOnlySubjects(lines.split("\n").filter(Boolean));
+}
+
 function upstreamPullsLanded(stableTag, runDir) {
   return UPSTREAM_PULLS.every((pull) => {
     const [merged, sha] = gh(
@@ -397,6 +440,11 @@ function gate({ runDir, env }) {
     ["typecheck", "npm", ["run", "typecheck"]],
     ["app-deps", "npm", ["run", "build:app-deps"]],
     ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app"]],
+    [
+      "daemon-patch-unit",
+      "npm",
+      ["run", "test:unit", "--workspace=@getpaseo/server", "--", ...DAEMON_PATCH_TESTS],
+    ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
     ["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...FEATURE_SPECS]],
   ];
@@ -409,7 +457,7 @@ function checkScope(tag, runDir) {
   if (outside.length > 0) {
     throw new StepFailure(
       "scope",
-      `the branch changes files outside the app: ${outside.join(", ")}`,
+      `the branch changes files outside the app and the daemon patch: ${outside.join(", ")}`,
     );
   }
 }
@@ -804,7 +852,19 @@ function work({ ctx, options, plan, runDir }) {
   // A run that died mid-rebase leaves it in progress; the next one starts clean.
   if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
   if (options.retire) return retire({ ctx, options, runDir, reason: "--retire" });
-  if (plan === "rebase" && upstreamPullsLanded(ctx.latestTag, runDir)) {
+  // With no pull left to wait for, only fork-only features remain and the rebase carries them.
+  if (
+    plan === "rebase" &&
+    UPSTREAM_PULLS.length > 0 &&
+    upstreamPullsLanded(ctx.latestTag, runDir)
+  ) {
+    const forkOnly = forkOnlyCommits(`${ctx.baseTag}..${ctx.head}`, runDir);
+    if (forkOnly.length > 0) {
+      throw new StepFailure(
+        "retire",
+        `upstream ${ctx.latestTag} carries the fork's pulls, but ${forkOnly.join("; ")} has no upstream pull, so the fork keeps the app. Take the merged features' commits off ${RELEASE_BRANCH} and their pulls out of UPSTREAM_PULLS; the next run rebases the rest onto ${ctx.latestTag}.`,
+      );
+    }
     const reason = `upstream ${ctx.latestTag} carries the fork's pulls`;
     return retire({ ctx, options, runDir, reason });
   }
