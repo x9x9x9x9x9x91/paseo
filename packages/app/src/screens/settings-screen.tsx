@@ -87,6 +87,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
 import { DesktopNotificationsSection } from "@/desktop/components/desktop-notifications-section";
+import { AttentionProjectsSection } from "@/screens/settings/attention-projects-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
 import { IntegrationsSection } from "@/desktop/components/integrations-section";
 import { isElectronRuntime } from "@/desktop/host";
@@ -161,6 +162,16 @@ interface SidebarSectionItem {
   Content?: ComponentType;
 }
 
+/** The desktop part renders nothing in a browser, where the projects choice still drives banners. */
+function NotificationsPage() {
+  return (
+    <>
+      <DesktopNotificationsSection />
+      <AttentionProjectsSection />
+    </>
+  );
+}
+
 const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "general", labelKey: "settings.sections.general", icon: Settings },
   {
@@ -215,8 +226,8 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     id: "notifications",
     labelKey: "settings.sections.notifications",
     icon: Bell,
-    desktopOnly: true,
-    Content: DesktopNotificationsSection,
+    webOnly: true,
+    Content: NotificationsPage,
   },
   {
     id: "permissions",

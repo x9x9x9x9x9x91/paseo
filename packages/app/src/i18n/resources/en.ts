@@ -2288,6 +2288,19 @@ export const en = {
       sentTitle: "Test notification sent",
       sentDescription: "Paseo handed the notification to the operating system.",
       sendFailedTitle: "Unable to send test notification",
+      projects: {
+        title: "Badge and notifications",
+        info: "Only workspaces in these projects count toward the Dock badge and raise notifications. Every workspace still shows its state in the sidebar.",
+        scope: {
+          label: "Projects",
+          hint: "With chosen projects, a new project stays off until you turn it on",
+          options: {
+            all: "Every project",
+            chosen: "Chosen projects",
+          },
+        },
+        empty: "No projects yet",
+      },
     },
     hostSections: {
       projects: "Projects",

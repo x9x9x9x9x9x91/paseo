@@ -2203,6 +2203,19 @@ export const zhCN: TranslationResources = {
       sentTitle: "测试通知已发送",
       sentDescription: "Paseo 已将通知交给操作系统。",
       sendFailedTitle: "无法发送测试通知",
+      projects: {
+        title: "角标和通知",
+        info: "只有这些项目中的工作区会计入程序坞角标并发出通知。所有工作区仍会在侧边栏中显示其状态。",
+        scope: {
+          label: "项目",
+          hint: "选择项目后，新项目会保持关闭，直到你将其打开",
+          options: {
+            all: "所有项目",
+            chosen: "所选项目",
+          },
+        },
+        empty: "还没有项目",
+      },
     },
     hostSections: {
       projects: "项目",

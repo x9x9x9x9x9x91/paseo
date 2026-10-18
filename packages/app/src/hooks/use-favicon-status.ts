@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
 import { useAggregatedAgents } from "./use-aggregated-agents";
 import { getDesktopHost } from "@/desktop/host";
+import { useAppSettings } from "@/hooks/use-settings";
 import { useWorkspaceStatusesForBadges } from "@/stores/session-store-hooks";
 import { deriveMacDockBadgeCountFromWorkspaceStatuses } from "@/utils/desktop-badge-state";
 import { isNative } from "@/constants/platform";
@@ -95,7 +96,9 @@ async function updateMacDockBadge(count?: number) {
 
 export function useFaviconStatus() {
   const { agents } = useAggregatedAgents({ demand: !isNative });
-  const workspaceStatuses = useWorkspaceStatusesForBadges();
+  const { settings } = useAppSettings();
+  // The favicon below follows every agent; only the dock badge and OS banners follow this choice.
+  const workspaceStatuses = useWorkspaceStatusesForBadges(settings.attentionProjects);
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getSystemColorScheme);
   const lastDockBadgeCountRef = useRef<number | undefined>(undefined);
 
