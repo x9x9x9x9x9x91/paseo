@@ -9,6 +9,8 @@ export interface OverlayEntry {
   getLayer(): number;
   getKeys(): readonly string[];
   onKeyDown(event: KeyboardInputEvent): boolean;
+  /** Answers keys only while no other overlay is open, and does not count as an open overlay. */
+  passive?: boolean;
 }
 export function createOverlayRegistry() {
   const entries: OverlayEntry[] = [];
@@ -16,8 +18,13 @@ export function createOverlayRegistry() {
   const notify = () => {
     for (const listener of listeners) listener();
   };
+  function hasActive(): boolean {
+    return entries.some((entry) => !entry.passive);
+  }
   function getTop(): OverlayEntry | undefined {
-    return entries.reduce<OverlayEntry | undefined>(
+    // A passive control only takes keys while no real overlay is open.
+    const candidates = hasActive() ? entries.filter((entry) => !entry.passive) : entries;
+    return candidates.reduce<OverlayEntry | undefined>(
       (top, entry) => (!top || entry.getLayer() >= top.getLayer() ? entry : top),
       undefined,
     );
@@ -25,7 +32,8 @@ export function createOverlayRegistry() {
   return {
     getTop,
     getKeys: () => getTop()?.getKeys() ?? [],
-    hasActive: () => entries.length > 0,
+    hasActive,
+    hasEntries: () => entries.length > 0,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
