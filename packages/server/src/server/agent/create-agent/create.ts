@@ -319,6 +319,7 @@ async function resolveMcpCreateAgent(
       cwd,
       worktree: input.worktree,
       initialPrompt: input.initialPrompt ?? "",
+      provider,
     });
   if (createdWorktree) input.onWorktreeCreated?.(createdWorktree);
 
@@ -333,7 +334,10 @@ async function resolveMcpCreateAgent(
     resolveWorkspace: async (workspaceId) => ({ workspaceId, cwd: resolvedCwd }),
     createWorkspace: async () => ({
       workspaceId: requireResolvedWorkspaceId(
-        await ensureWorkspaceForMcpCreate(dependencies, resolvedCwd, input.initialPrompt ?? ""),
+        await ensureWorkspaceForMcpCreate(dependencies, resolvedCwd, {
+          prompt: input.initialPrompt ?? "",
+          provider,
+        }),
       ),
       cwd: resolvedCwd,
     }),
@@ -440,12 +444,12 @@ function buildMcpSessionConfig(params: {
 async function ensureWorkspaceForMcpCreate(
   dependencies: CreateAgentCommandDependencies,
   cwd: string,
-  initialPrompt: string,
+  firstAgentContext: FirstAgentContext,
 ): Promise<string | undefined> {
   if (!dependencies.ensureWorkspaceForCreate) {
     return undefined;
   }
-  return dependencies.ensureWorkspaceForCreate(cwd, { prompt: initialPrompt });
+  return dependencies.ensureWorkspaceForCreate(cwd, firstAgentContext);
 }
 
 async function sendInitialPrompt(
@@ -510,6 +514,7 @@ async function resolveMcpCwd(params: {
   dependencies: CreateAgentCommandDependencies;
   cwd: string;
   initialPrompt: string;
+  provider: string;
   worktree: CreateAgentFromMcpInput["worktree"];
 }): Promise<{
   resolvedCwd: string;
@@ -545,7 +550,7 @@ async function resolveMcpCwd(params: {
       refName: worktree.refName,
       action: worktree.action,
       githubPrNumber: worktree.githubPrNumber,
-      firstAgentContext: { prompt: params.initialPrompt },
+      firstAgentContext: { prompt: params.initialPrompt, provider: params.provider },
       runSetup: false,
       paseoHome: dependencies.paseoHome,
       worktreesRoot: dependencies.worktreesRoot,
