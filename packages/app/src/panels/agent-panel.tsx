@@ -46,6 +46,10 @@ import {
 } from "@/components/rewind";
 import { useAgentDescriptor } from "@/agent-presentation";
 import {
+  ComposerQuoteProvider,
+  type ComposerQuoteTarget,
+} from "@/assistant-selection-copy/composer-quote";
+import {
   useToastHost,
   type DismissToastById,
   type ToastApi,
@@ -1227,6 +1231,21 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     onAttentionInputFocus();
     return false;
   }, [onAttentionInputFocus]);
+  // A quote goes into the agent's own composer, so only where that composer shows.
+  const quoteTarget = useMemo<ComposerQuoteTarget | null>(
+    () =>
+      isPaneFocused && showsComposer && !draft && hasActiveComposer
+        ? { textSource: agentInputDraft.textSource, setText: agentInputDraft.replaceText }
+        : null,
+    [
+      agentInputDraft.replaceText,
+      agentInputDraft.textSource,
+      draft,
+      hasActiveComposer,
+      isPaneFocused,
+      showsComposer,
+    ],
+  );
   const streamContent = (
     <View
       style={animatedStaticStyles.content}
@@ -1250,6 +1269,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           revealInitialHistory={hasCachedHistory || showHistorySyncError}
           hasActiveComposer={hasActiveComposer}
           toast={toastApi}
+          quoteTarget={quoteTarget}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       </RenderProfile>
@@ -1434,6 +1454,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   revealInitialHistory,
   hasActiveComposer,
   toast,
+  quoteTarget,
   onOpenWorkspaceFile,
 }: {
   streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
@@ -1447,6 +1468,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   revealInitialHistory: boolean;
   hasActiveComposer: boolean;
   toast: ReturnType<typeof useToastHost>["api"];
+  quoteTarget: ComposerQuoteTarget | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
@@ -1526,24 +1548,26 @@ const AgentStreamSection = memo(function AgentStreamSection({
     return null;
   }
   return (
-    <AgentStreamView
-      ref={streamViewRef}
-      agentId={agent.id}
-      serverId={serverId}
-      context={agent}
-      streamItems={streamItems}
-      pendingPermissions={pendingPermissions}
-      routeBottomAnchorRequest={routeBottomAnchorRequest}
-      isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
-      isInitialHistoryLoading={isInitialHistoryLoading}
-      revealInitialHistory={revealInitialHistory}
-      bottomOverlayTailClearance={bottomOverlayTailClearance}
-      bottomOverlayControlClearance={bottomOverlayControlClearance}
-      toast={toast}
-      pendingMessageSubmissions={pendingMessageSubmissions}
-      turnPresentation={turnPresentation}
-      onOpenWorkspaceFile={onOpenWorkspaceFile}
-    />
+    <ComposerQuoteProvider target={quoteTarget}>
+      <AgentStreamView
+        ref={streamViewRef}
+        agentId={agent.id}
+        serverId={serverId}
+        context={agent}
+        streamItems={streamItems}
+        pendingPermissions={pendingPermissions}
+        routeBottomAnchorRequest={routeBottomAnchorRequest}
+        isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
+        isInitialHistoryLoading={isInitialHistoryLoading}
+        revealInitialHistory={revealInitialHistory}
+        bottomOverlayTailClearance={bottomOverlayTailClearance}
+        bottomOverlayControlClearance={bottomOverlayControlClearance}
+        toast={toast}
+        pendingMessageSubmissions={pendingMessageSubmissions}
+        turnPresentation={turnPresentation}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />
+    </ComposerQuoteProvider>
   );
 });
 
