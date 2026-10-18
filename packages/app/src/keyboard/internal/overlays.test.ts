@@ -91,4 +91,50 @@ describe("overlay registration lifecycle", () => {
     unsubscribe();
     expect(observed).toEqual([["Enter"], []]);
   });
+
+  it("lets a passive overlay answer keys without counting as an open overlay", () => {
+    const registry = createOverlayRegistry();
+    const calls: string[] = [];
+    const release = registry.register({
+      getLayer: () => 10,
+      getKeys: () => ["Escape"],
+      onKeyDown: (event) => {
+        calls.push(event.key);
+        return event.key === "Escape";
+      },
+      passive: true,
+    });
+    expect(registry.hasActive()).toBe(false);
+    expect(registry.dispatch(keyEvent("Escape"))).toBe(true);
+    expect(registry.dispatch(keyEvent("f"))).toBe(false);
+    expect(calls).toEqual(["Escape", "f"]);
+    release();
+  });
+
+  it("keeps keys with an open overlay when a passive one registers after it", () => {
+    const registry = createOverlayRegistry();
+    const calls: string[] = [];
+    const releaseMenu = registry.register({
+      getLayer: () => 10,
+      getKeys: () => ["Escape"],
+      onKeyDown: () => {
+        calls.push("menu");
+        return true;
+      },
+    });
+    const releasePassive = registry.register({
+      getLayer: () => 10,
+      getKeys: () => ["Escape"],
+      onKeyDown: () => {
+        calls.push("passive");
+        return true;
+      },
+      passive: true,
+    });
+    expect(registry.hasActive()).toBe(true);
+    expect(registry.dispatch(keyEvent("Escape"))).toBe(true);
+    expect(calls).toEqual(["menu"]);
+    releasePassive();
+    releaseMenu();
+  });
 });
