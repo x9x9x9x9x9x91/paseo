@@ -1,4 +1,5 @@
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { isProjectCountedForAttention, type AttentionProjects } from "./attention-projects";
 import { memoizeOnSessionMaps } from "./memoize-on-session-maps";
 
 export type DesktopBadgeWorkspaceStatus = WorkspaceDescriptor["status"];
@@ -19,23 +20,31 @@ export function isWorkspaceActionableForDesktopBadge(status: DesktopBadgeWorkspa
  * The macOS dock badge only needs a count, so count here instead of materialising every
  * workspace status and comparing the whole list on every store write.
  */
-export function selectMacDockBadgeCount(state: WorkspaceStatusSource): number | undefined {
+export function selectMacDockBadgeCount(
+  state: WorkspaceStatusSource,
+  attentionProjects: AttentionProjects,
+): number | undefined {
   let actionableCount = 0;
   for (const session of Object.values(state.sessions)) {
     if (!session) continue;
     for (const workspace of session.workspaces.values()) {
-      if (isWorkspaceActionableForDesktopBadge(workspace.status)) actionableCount += 1;
+      if (!isWorkspaceActionableForDesktopBadge(workspace.status)) continue;
+      if (!isProjectCountedForAttention(attentionProjects, workspace.projectId)) continue;
+      actionableCount += 1;
     }
   }
   return actionableCount > 0 ? actionableCount : undefined;
 }
 
-/** A session-store selector for the dock badge count that recounts only when a workspace map changes. */
-export function createMacDockBadgeCountSelector(): (
-  state: WorkspaceStatusSource,
-) => number | undefined {
+/**
+ * A session-store selector for the dock badge count that recounts only when a workspace map
+ * changes. Make a new one when the attention projects choice changes.
+ */
+export function createMacDockBadgeCountSelector(
+  attentionProjects: AttentionProjects,
+): (state: WorkspaceStatusSource) => number | undefined {
   return memoizeOnSessionMaps<WorkspaceStatusSession, WorkspaceStatusSource, number | undefined>(
     (session) => session.workspaces,
-    selectMacDockBadgeCount,
+    (state) => selectMacDockBadgeCount(state, attentionProjects),
   );
 }
