@@ -38,6 +38,14 @@ export interface ResolveStructuredGenerationProvidersOptions {
     model?: string | null;
     thinkingOptionId?: string | null;
   };
+  /**
+   * Providers of the agents whose words the prompt carries, most direct first: a new
+   * workspace's first agent, or the agents working in a checkout. The first custom provider
+   * among them is the only one tried, since a custom provider is how the user picks where
+   * their prompts go (a zero-retention endpoint, another account). Without one, every
+   * candidate is tried as before.
+   */
+  sourceProviders?: ReadonlyArray<AgentProvider | null | undefined>;
 }
 
 export async function resolveStructuredGenerationProviders(
@@ -51,6 +59,16 @@ export async function resolveStructuredGenerationProviders(
   const enabledEntries = providerEntries.filter((entry) => entry.enabled);
   const modelEntries = enabledEntries.filter((entry) => (entry.models?.length ?? 0) > 0);
   const entriesByProvider = new Map(enabledEntries.map((entry) => [entry.provider, entry]));
+  const pinnedProvider = resolvePinnedProvider(options.sourceProviders, providerEntries);
+  if (pinnedProvider) {
+    return resolvePinnedProviders({
+      pinnedProvider,
+      configuredProviders,
+      currentSelection: options.currentSelection,
+      modelEntries,
+      entriesByProvider,
+    });
+  }
   const providers: StructuredGenerationProvider[] = [];
 
   for (const configured of configuredProviders) {
@@ -82,6 +100,67 @@ export async function resolveStructuredGenerationProviders(
   }
 
   return dedupeProviders(providers);
+}
+
+function resolvePinnedProvider(
+  sourceProviders: ResolveStructuredGenerationProvidersOptions["sourceProviders"],
+  providerEntries: readonly ProviderSnapshotEntry[],
+): AgentProvider | null {
+  for (const sourceProvider of sourceProviders ?? []) {
+    const provider = sourceProvider?.trim();
+    if (!provider) {
+      continue;
+    }
+    // The snapshot lists every configured provider, so one it lacks was removed from the
+    // config while an agent still runs on it: it pins too, and nothing runs.
+    const entry = providerEntries.find((candidate) => candidate.provider === provider);
+    if (!entry || entry.source === "custom") {
+      return provider;
+    }
+  }
+  return null;
+}
+
+/**
+ * The usual order kept to one provider: its configured entries, the defaults matched within its
+ * own models, then the current selection, or the provider's default model when the selection
+ * is another provider's. A pinned provider that cannot run leaves nothing to try.
+ */
+function resolvePinnedProviders(input: {
+  pinnedProvider: AgentProvider;
+  configuredProviders: ReturnType<typeof readConfiguredProviders>;
+  currentSelection: ResolveStructuredGenerationProvidersOptions["currentSelection"];
+  modelEntries: readonly ProviderSnapshotEntry[];
+  entriesByProvider: ReadonlyMap<AgentProvider, ProviderSnapshotEntry>;
+}): StructuredGenerationProvider[] {
+  const { pinnedProvider, modelEntries, entriesByProvider } = input;
+  const pinnedEntries = modelEntries.filter((entry) => entry.provider === pinnedProvider);
+  const providers: StructuredGenerationProvider[] = [];
+
+  for (const configured of input.configuredProviders) {
+    const resolved = resolveConfiguredCandidate(configured, modelEntries, entriesByProvider);
+    if (resolved) {
+      providers.push(resolved);
+    }
+  }
+
+  for (const identifier of DEFAULT_STRUCTURED_GENERATION_PROVIDERS) {
+    const resolved = resolveByModelSubstring(pinnedEntries, identifier);
+    if (resolved) {
+      providers.push(resolved);
+    }
+  }
+
+  const selection =
+    input.currentSelection?.provider?.trim() === pinnedProvider
+      ? input.currentSelection
+      : { provider: pinnedProvider };
+  const resolvedSelection = resolveCurrentSelection(selection, modelEntries, entriesByProvider);
+  if (resolvedSelection) {
+    providers.push(resolvedSelection);
+  }
+
+  return dedupeProviders(providers.filter((provider) => provider.provider === pinnedProvider));
 }
 
 function resolveCurrentSelection(

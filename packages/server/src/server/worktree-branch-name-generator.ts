@@ -108,6 +108,11 @@ export async function generateBranchNameFromFirstAgentContext(
           providerSnapshotManager: options.providerSnapshotManager,
           daemonConfig: options.daemonConfig,
           currentSelection: options.currentSelection,
+          // The prompt is the first agent's, so its provider decides; a context from an older
+          // client has none, and the focused agent stands in.
+          sourceProviders: [
+            options.firstAgentContext?.provider ?? options.currentSelection?.provider,
+          ],
         })
       : [];
     const result = await generator({
