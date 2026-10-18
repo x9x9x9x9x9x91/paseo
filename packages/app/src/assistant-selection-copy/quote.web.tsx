@@ -217,13 +217,7 @@ function QuoteButton({
       surfaceRef={setSurface}
       testID="assistant-selection-quote"
     >
-      <Button
-        variant="ghost"
-        size="xs"
-        leftIcon={TextQuote}
-        onPress={onPress}
-        testID="assistant-selection-quote-button"
-      >
+      <Button variant="ghost" size="xs" leftIcon={TextQuote} onPress={onPress}>
         {t("agentStream.quote.action")}
       </Button>
     </AnchoredSurface>
@@ -266,7 +260,12 @@ function QuoteNoteBox({
       ) {
         event.preventDefault();
         // A held Enter that opened the box repeats into it; only a fresh press adds the quote.
-        if (!event.repeat) onSubmit(noteRef.current);
+        if (!event.repeat) {
+          // onSubmit moves focus to the composer, whose Enter sends: drop this key's repeats
+          // until it comes up.
+          swallowEnterRepeatsUntilReleased();
+          onSubmit(noteRef.current);
+        }
         return true;
       }
       return false;
@@ -437,6 +436,36 @@ function isBareEnter(event: KeyboardEvent): boolean {
 function focusReadsEnter(target: EventTarget | null): boolean {
   if (resolveKeyboardFocusScope({ target, commandCenterOpen: false }) !== "other") return true;
   return target instanceof HTMLElement && target !== document.body && target.tabIndex >= 0;
+}
+
+/**
+ * Swallows the repeats of an Enter that is still held after the note box gave focus away,
+ * until the key comes up, so a held Enter cannot send the draft it just added to.
+ */
+function swallowEnterRepeatsUntilReleased() {
+  const swallowRepeat = (event: KeyboardEvent) => {
+    if (event.key !== "Enter") return;
+    // A fresh press means the key came up where this listener could not see it.
+    if (!event.repeat) {
+      release();
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const releaseOnKeyUp = (event: KeyboardEvent) => {
+    if (event.key === "Enter") release();
+  };
+  const release = () => {
+    window.removeEventListener("keydown", swallowRepeat, true);
+    window.removeEventListener("keyup", releaseOnKeyUp, true);
+    window.removeEventListener("blur", release);
+  };
+  // Added while the submitting press is dispatched on window, whose listeners for that press
+  // are already fixed, so the press itself never reaches this one.
+  window.addEventListener("keydown", swallowRepeat, true);
+  window.addEventListener("keyup", releaseOnKeyUp, true);
+  window.addEventListener("blur", release);
 }
 
 function preventDefault(event: Event) {

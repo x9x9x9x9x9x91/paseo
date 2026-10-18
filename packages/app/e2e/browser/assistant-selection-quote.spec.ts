@@ -27,7 +27,7 @@ function composer(page: Page) {
 }
 
 function quoteButton(page: Page) {
-  return page.getByTestId("assistant-selection-quote-button");
+  return page.getByRole("button", { name: "Quote", exact: true });
 }
 
 function noteInput(page: Page) {
@@ -186,6 +186,39 @@ test("Enter stays with the composer and a focused button while the Quote button 
     await expect(
       page.getByTestId("user-message").filter({ hasText: "Sent with Enter" }),
     ).toBeVisible();
+  } finally {
+    await agent.cleanup();
+  }
+});
+
+test("holding Enter in the note box adds the quote and sends nothing until the key comes up", async ({
+  page,
+}) => {
+  const agent = await openIdleAgent(page, "assistant-selection-quote-held-enter-");
+  try {
+    await composer(page).fill("Draft start");
+    await selectAssistantTextRange(page, "Closing paragraph.", "Closing paragraph.");
+    await quoteButton(page).click();
+    await expect(noteInput(page)).toBeFocused();
+    await page.keyboard.type("held note");
+
+    // Pressing a key that is already down repeats it, as holding it does.
+    await page.keyboard.down("Enter");
+    await expect(composer(page)).toBeFocused();
+    for (let repeat = 0; repeat < 5; repeat++) {
+      await page.keyboard.down("Enter");
+    }
+    await page.keyboard.up("Enter");
+    await expect(composer(page)).toHaveValue("Draft start\n\n> Closing paragraph.\n\nheld note");
+
+    // Released, Enter sends again, and the draft goes out whole as one message.
+    await page.keyboard.type(" and more");
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByTestId("user-message").filter({ hasText: "held note and more" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("user-message").filter({ hasText: "held note" })).toHaveCount(1);
+    await expect(composer(page)).toHaveValue("");
   } finally {
     await agent.cleanup();
   }

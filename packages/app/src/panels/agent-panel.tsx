@@ -1254,10 +1254,16 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   ) : null;
   const quoteTarget = useMemo<ComposerQuoteTarget | null>(
     () =>
-      showsComposer && isPaneFocused
+      showsComposer && isPaneFocused && hasActiveComposer
         ? { textSource: agentInputDraft.textSource, setText: agentInputDraft.replaceText }
         : null,
-    [agentInputDraft.replaceText, agentInputDraft.textSource, isPaneFocused, showsComposer],
+    [
+      agentInputDraft.replaceText,
+      agentInputDraft.textSource,
+      hasActiveComposer,
+      isPaneFocused,
+      showsComposer,
+    ],
   );
   const streamContent = (
     <View style={animatedStaticStyles.content}>
