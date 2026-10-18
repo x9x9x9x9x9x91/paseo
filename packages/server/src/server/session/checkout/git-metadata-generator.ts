@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import nodePath from "node:path";
 import { z } from "zod";
 import {
   StructuredAgentFallbackError,
@@ -17,7 +19,7 @@ import {
   buildMetadataPrompt,
   type MetadataConfigKey,
 } from "../../../utils/build-metadata-prompt.js";
-import { isRealpathInsideRoot } from "../../../utils/path.js";
+import { getRealpathAwareRelativePath } from "../../../utils/path.js";
 
 export interface PullRequestText {
   title: string;
@@ -181,8 +183,8 @@ export function createAgentStructuredTextGeneration(deps: {
   readDaemonConfig: () => StructuredGenerationDaemonConfig;
   /**
    * The worktree root of the checkout at cwd. The diff is read at the root and a commit stages
-   * the whole worktree, so the agents whose changes it carries are the ones working at or under
-   * the root, wherever the pane's directory sits.
+   * the whole worktree, so the agents whose changes it carries are the ones working in that
+   * worktree, wherever the pane's directory sits.
    */
   resolveCheckoutRoot: (cwd: string) => Promise<string>;
   getFocusedAgentId: () => string | null | undefined;
@@ -193,7 +195,7 @@ export function createAgentStructuredTextGeneration(deps: {
       const checkoutRoot = await deps.resolveCheckoutRoot(cwd);
       const checkoutAgents = deps.agentManager
         .listAgents()
-        .filter((agent) => isRealpathInsideRoot(checkoutRoot, agent.cwd));
+        .filter((agent) => worksInCheckout(checkoutRoot, agent.cwd));
       const focusedAgentId = deps.getFocusedAgentId();
       const focusedAgent = checkoutAgents.find((agent) => agent.id === focusedAgentId);
       const providers = await resolveStructuredGenerationProviders({
@@ -220,6 +222,26 @@ export function createAgentStructuredTextGeneration(deps: {
       });
     },
   };
+}
+
+/**
+ * Whether cwd is at or under the checkout root with no `.git` of its own on the way down. Git
+ * stops at a nested checkout (a worktree or submodule inside the folder), so the root's diff
+ * does not carry the changes of an agent working there.
+ */
+function worksInCheckout(checkoutRoot: string, cwd: string): boolean {
+  const relativePath = getRealpathAwareRelativePath(checkoutRoot, cwd);
+  if (relativePath === null) {
+    return false;
+  }
+  let directory = checkoutRoot;
+  for (const segment of relativePath.split(/[\\/]/).filter(Boolean)) {
+    directory = nodePath.join(directory, segment);
+    if (existsSync(nodePath.join(directory, ".git"))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function renderFileList(structured: CheckoutDiff["structured"]): string {

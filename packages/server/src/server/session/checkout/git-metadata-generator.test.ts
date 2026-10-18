@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
@@ -162,6 +165,7 @@ describe("createAgentStructuredTextGeneration", () => {
 
   // Every provider reads as unavailable, so the attempts record exactly which ones were tried.
   async function attemptedProviders(input: {
+    checkoutRoot?: string;
     paneCwd?: string;
     agents: CheckoutAgent[];
     focusedAgentId?: string;
@@ -210,12 +214,12 @@ describe("createAgentStructuredTextGeneration", () => {
         ],
       },
       readDaemonConfig: () => ({}),
-      resolveCheckoutRoot: async () => "/repo",
+      resolveCheckoutRoot: async () => input.checkoutRoot ?? "/repo",
       getFocusedAgentId: () => input.focusedAgentId,
     });
     const error = await generation
       .generate({
-        cwd: input.paneCwd ?? "/repo",
+        cwd: input.paneCwd ?? input.checkoutRoot ?? "/repo",
         prompt: "Write a commit message",
         schema: z.object({ message: z.string() }),
         schemaName: "CommitMessage",
@@ -263,6 +267,35 @@ describe("createAgentStructuredTextGeneration", () => {
     ).resolves.toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
   });
 
+  it("ignores agents in a checkout nested inside the worktree", async () => {
+    const checkoutRoot = await mkdtemp(path.join(tmpdir(), "paseo-checkout-pin-"));
+    try {
+      await mkdir(path.join(checkoutRoot, ".git"));
+      await mkdir(path.join(checkoutRoot, "nested", "src"), { recursive: true });
+      await writeFile(path.join(checkoutRoot, "nested", ".git"), "gitdir: /elsewhere\n");
+      await mkdir(path.join(checkoutRoot, "packages", "app"), { recursive: true });
+
+      await expect(
+        attemptedProviders({
+          checkoutRoot,
+          agents: [
+            { id: "nested", cwd: path.join(checkoutRoot, "nested", "src"), provider: "claude-zdr" },
+          ],
+        }),
+      ).resolves.toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
+      await expect(
+        attemptedProviders({
+          checkoutRoot,
+          agents: [
+            { id: "app", cwd: path.join(checkoutRoot, "packages", "app"), provider: "claude-zdr" },
+          ],
+        }),
+      ).resolves.toEqual([{ provider: "claude-zdr", model: "claude-haiku-5-5" }]);
+    } finally {
+      await rm(checkoutRoot, { recursive: true, force: true });
+    }
+  });
+
   it("uses the focused agent's model last when it works at the worktree root", async () => {
     await expect(
       attemptedProviders({
@@ -274,6 +307,17 @@ describe("createAgentStructuredTextGeneration", () => {
       { provider: "claude", model: "claude-haiku-4-5" },
       { provider: "claude", model: "claude-opus-5-5" },
     ]);
+  });
+
+  it("leaves out a focused agent working outside the worktree", async () => {
+    await expect(
+      attemptedProviders({
+        agents: [
+          { id: "focused", cwd: "/repo-other", provider: "claude", model: "claude-opus-5-5" },
+        ],
+        focusedAgentId: "focused",
+      }),
+    ).resolves.toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
   });
 
   it("tries nothing when agents in the checkout are on two custom providers", async () => {
