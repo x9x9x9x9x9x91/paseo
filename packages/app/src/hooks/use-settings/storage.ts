@@ -25,6 +25,11 @@ import {
 } from "@/components/sidebar/display-preferences/row-items";
 import { isNative } from "@/constants/platform";
 import {
+  AttentionProjectsSchema,
+  DEFAULT_ATTENTION_PROJECTS,
+  type AttentionProjects,
+} from "@/utils/attention-projects";
+import {
   DEFAULT_CONTENT_MAX_WIDTH,
   FONT_SIZE,
   PLUGIN_THEME_PREFERENCE,
@@ -122,6 +127,8 @@ export interface AppSettings {
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
   notifications: NotificationPreferences;
+  /** Which projects count toward the dock badge and raise OS notifications. */
+  attentionProjects: AttentionProjects;
 }
 
 export type AppSettingsUpdate =
@@ -180,6 +187,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
   notifications: DEFAULT_NOTIFICATION_PREFERENCES,
+  attentionProjects: DEFAULT_ATTENTION_PROJECTS,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -313,6 +321,7 @@ const StoredAppSettingsSchema = z
       .unknown()
       .transform((value) => normalizeNotificationPreferences(value))
       .catch(DEFAULT_NOTIFICATION_PREFERENCES),
+    attentionProjects: AttentionProjectsSchema,
     // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
     openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
     // COMPAT(rendererDesktopSettings): these fields used to share this renderer-owned key.

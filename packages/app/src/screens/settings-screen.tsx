@@ -75,6 +75,7 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
 import { NotificationsSection } from "@/components/settings/notifications-section";
+import { AttentionProjectsSection } from "@/screens/settings/attention-projects-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
 import { IntegrationsSection } from "@/desktop/components/integrations-section";
 import { isElectronRuntime } from "@/desktop/host";
@@ -1543,10 +1544,12 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
             </>
           );
         case "notifications":
+          // The projects choice drives the Dock badge and OS banners on web; phone push comes from the daemon.
           return (
             <>
               <NotificationsSection />
               {isDesktopApp ? <DesktopPermissionsSection /> : null}
+              {isWeb ? <AttentionProjectsSection /> : null}
             </>
           );
         case "about":
