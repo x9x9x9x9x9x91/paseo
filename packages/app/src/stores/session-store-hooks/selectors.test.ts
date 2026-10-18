@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_ATTENTION_PROJECTS } from "@/utils/attention-projects";
 import { createProjectViewKey } from "@/projects/workspace-structure";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -598,7 +599,7 @@ describe("selectWorkspaceStatusesForBadges", () => {
 
     const tracked = trackSelector(
       useSessionStore,
-      (state) => selectWorkspaceStatusesForBadges(state),
+      (state) => selectWorkspaceStatusesForBadges(state, DEFAULT_ATTENTION_PROJECTS),
       workspaceEqualityFns.deep,
     );
     const before = tracked.current;
@@ -617,5 +618,28 @@ describe("selectWorkspaceStatusesForBadges", () => {
     expect(tracked.current).toEqual(["failed", "attention"]);
 
     tracked.stop();
+  });
+
+  it("counts only workspaces of the chosen projects", () => {
+    initializeWorkspaces([
+      createWorkspace({ id: "chat-a", projectId: "prj_chats", status: "attention" }),
+      createWorkspace({ id: "chat-b", projectId: "prj_chats", status: "done" }),
+      createWorkspace({ id: "build", projectId: "prj_builds", status: "attention" }),
+      createWorkspace({ id: "added-later", projectId: "prj_added_later", status: "failed" }),
+    ]);
+    const state = useSessionStore.getState();
+
+    expect(selectWorkspaceStatusesForBadges(state, DEFAULT_ATTENTION_PROJECTS)).toEqual([
+      "attention",
+      "done",
+      "attention",
+      "failed",
+    ]);
+    expect(
+      selectWorkspaceStatusesForBadges(state, {
+        scope: "chosen",
+        projectIds: ["prj_chats", "prj_removed"],
+      }),
+    ).toEqual(["attention", "done"]);
   });
 });

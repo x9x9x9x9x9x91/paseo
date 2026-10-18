@@ -21,6 +21,7 @@ import {
   type WorkspaceStructure,
 } from "./selectors";
 import { useSessionStore, type WorkspaceDescriptor } from "../session-store";
+import type { AttentionProjects } from "@/utils/attention-projects";
 import type { DesktopBadgeWorkspaceStatus } from "@/utils/desktop-badge-state";
 
 // These are the ONLY supported ways to read workspaces from the session store.
@@ -155,10 +156,12 @@ export function useHasWorkspaces(serverId: string | null): boolean {
   );
 }
 
-export function useWorkspaceStatusesForBadges(): DesktopBadgeWorkspaceStatus[] {
+export function useWorkspaceStatusesForBadges(
+  attentionProjects: AttentionProjects,
+): DesktopBadgeWorkspaceStatus[] {
   return useStoreWithEqualityFn(
     useSessionStore,
-    (state) => selectWorkspaceStatusesForBadges(state),
+    (state) => selectWorkspaceStatusesForBadges(state, attentionProjects),
     workspaceEqualityFns.deep,
   );
 }
