@@ -2230,6 +2230,19 @@ export const ja: TranslationResources = {
       sentTitle: "テスト通知を送信しました",
       sentDescription: "Paseo が通知をオペレーティングシステムに渡しました。",
       sendFailedTitle: "テスト通知を送信できません",
+      projects: {
+        title: "バッジと通知",
+        info: "これらのプロジェクトのワークスペースだけが Dock のバッジに数えられ、通知を表示します。すべてのワークスペースは引き続きサイドバーに状態を表示します。",
+        scope: {
+          label: "プロジェクト",
+          hint: "選択したプロジェクトの場合、新しいプロジェクトはオンにするまでオフのままです",
+          options: {
+            all: "すべてのプロジェクト",
+            chosen: "選択したプロジェクト",
+          },
+        },
+        empty: "プロジェクトがまだありません",
+      },
     },
     hostSections: {
       projects: "プロジェクト",
