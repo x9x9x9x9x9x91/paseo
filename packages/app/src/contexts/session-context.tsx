@@ -3,7 +3,7 @@ import { Buffer } from "buffer";
 import { AppState } from "react-native";
 import { isNative } from "@/constants/platform";
 import { observeOpenWorkspaceAgentIds } from "@/stores/workspace-layout-store";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useClientActivity } from "@/hooks/use-client-activity";
 import { useAppVisible } from "@/hooks/use-app-visible";
@@ -23,6 +23,7 @@ import {
   deliverPluginOsNotification,
   deliverTerminalAttentionOsNotification,
   getCurrentNotificationPreferences,
+  type OsNotificationSender,
 } from "./session-notifications";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
@@ -37,6 +38,8 @@ import {
   useSessionStore,
 } from "@/stores/session-store";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { isWorkspaceCountedForAttention } from "@/utils/attention-projects";
+import { getCachedAppSettings } from "@/hooks/use-settings";
 import { getIsAppVisible } from "@/utils/app-visibility";
 import {
   getInitKey,
@@ -106,6 +109,29 @@ function notifyVoiceAbortFailure(
   if (data.type === "error" && data.metadata?.voiceAbortFailed === true) {
     notifyError(data.content);
   }
+}
+
+/**
+ * Sends an OS notification only when its workspace belongs to a project that counts toward
+ * attention; the workspace is looked up in the session of `sessionServerId`.
+ */
+function createAttentionProjectsSender(
+  queryClient: QueryClient,
+  sessionServerId: string,
+): OsNotificationSender {
+  return (payload) => {
+    const workspaceId = payload.data?.workspaceId;
+    if (
+      !isWorkspaceCountedForAttention({
+        preference: getCachedAppSettings(queryClient).attentionProjects,
+        workspaces: useSessionStore.getState().sessions[sessionServerId]?.workspaces,
+        workspaceId: typeof workspaceId === "string" ? workspaceId : undefined,
+      })
+    ) {
+      return Promise.resolve(false);
+    }
+    return sendOsNotification(payload);
+  };
 }
 
 interface SessionProviderSharedProps {
@@ -210,7 +236,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         session: useSessionStore.getState().sessions[serverId],
         attentionNotified: attentionNotifiedRef.current,
         preferences: getCurrentNotificationPreferences(queryClient),
-        sendNotification: sendOsNotification,
+        sendNotification: createAttentionProjectsSender(queryClient, serverId),
       });
     },
     [queryClient, serverId],
@@ -559,7 +585,10 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         serverId,
         payload: message.payload,
         preferences: getCurrentNotificationPreferences(queryClient),
-        sendNotification: sendOsNotification,
+        sendNotification: createAttentionProjectsSender(
+          queryClient,
+          message.payload.serverId ?? serverId,
+        ),
       });
     });
 
