@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  closedPulls,
   compareStableTags,
   decide,
   featureSubjects,
@@ -91,6 +92,42 @@ test("a feature whose Upstream trailer is none is fork-only", () => {
     ]),
     ["fix(server): naming stays on a custom provider", "fix(server): spelled differently"],
   );
+});
+
+test("a pull upstream closed without merging is told once, and again only after a reopen", () => {
+  const open = { state: "open", merged: false };
+  const merged = { state: "closed", merged: true };
+  const closed = { state: "closed", merged: false };
+  assert.deepEqual(
+    closedPulls([
+      [7176, open],
+      [7313, merged],
+    ]),
+    { untold: [], told: [] },
+  );
+  assert.deepEqual(
+    closedPulls([
+      [7176, open],
+      [7313, closed],
+    ]),
+    { untold: [7313], told: [] },
+  );
+  assert.deepEqual(closedPulls([[7313, closed]], [7313]), { untold: [], told: [7313] });
+  // a read that failed keeps what was told, and tells nothing new
+  assert.deepEqual(
+    closedPulls(
+      [
+        [7176, null],
+        [7313, null],
+      ],
+      [7313],
+    ),
+    { untold: [], told: [7313] },
+  );
+  // reopened: forgotten, so closing it again is told again
+  assert.deepEqual(closedPulls([[7313, open]], [7313]), { untold: [], told: [] });
+  // a pull taken out of UPSTREAM_PULLS is not read, and drops out of what was told
+  assert.deepEqual(closedPulls([[7176, open]], [7313]), { untold: [], told: [] });
 });
 
 test("a candidate is skipped after three failed runs, not before", () => {
