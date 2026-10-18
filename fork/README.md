@@ -3,7 +3,8 @@
 This fork ships Paseo's desktop app with features upstream has not merged yet. `fork/release` is upstream's latest stable tag plus the fork's own commits, and every upstream stable release gets a fork release the same day. Today that is:
 
 - the Quote button: select text in an agent message and quote it into the composer, upstream pull [#7176](https://github.com/getpaseo/paseo/pull/7176);
-- a daemon patch: a chat on a custom provider (the zero-retention Claude) has its workspace named, and its checkout's commit and pull request text written, on that provider only, upstream pull [#7313](https://github.com/getpaseo/paseo/pull/7313). Upstream names on the first provider with a Haiku, whatever provider the chat runs on, so a private chat's first message reached the subscription.
+- a daemon patch: a chat on a custom provider (the zero-retention Claude) has its workspace named, and its checkout's commit and pull request text written, on that provider only, upstream pull [#7313](https://github.com/getpaseo/paseo/pull/7313). Upstream names on the first provider with a Haiku, whatever provider the chat runs on, so a private chat's first message reached the subscription;
+- the projects choice in Settings > Notifications: count every project toward the Dock badge and the OS banners, or only the chosen ones. It has no upstream pull (`Upstream: none`), so it holds the retirement while it is on the branch.
 
 ## What a fork release changes
 
@@ -28,7 +29,7 @@ Electron's updater on macOS installs a build only when it satisfies the running 
 A run asks GitHub for upstream's latest release (published, not a prerelease), then:
 
 1. A newer upstream release: rebase the branch onto its tag. On a conflict, a headless agent tries once; it reaches sin0's model proxy through an ssh tunnel, since sincoder has no login of its own. If it cannot resolve the conflict, Tim gets a notice with the conflict and the app stays on the last release.
-2. Check: typecheck, lint, format, this folder's tests, the app's unit tests, the daemon patch's tests and the Quote and Copy Playwright specs, on the Node major upstream's release workflow uses.
+2. Check: typecheck, lint, format, this folder's tests, the app's unit tests, the daemon patch's tests and the features' Playwright specs (`FEATURE_SPECS`), on the Node major upstream's release workflow uses.
 3. Build the arm64 app, signed with `Developer ID Application: Tim Roth (HKM8HFGKC6)` and notarized, then verify the signature, the notarization, the version and the feed inside the app.
 4. Push the rebased branch and publish the release, with `latest-mac.yml`, the zip and dmg and their blockmaps, marked latest.
 
