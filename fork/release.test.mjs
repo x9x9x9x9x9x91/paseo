@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { test } from "node:test";
 import {
+  branchSpecs,
   closedPulls,
   compareStableTags,
   decide,
@@ -79,6 +84,44 @@ test("a fork release changes the app, the build config and the daemon patch only
       "package-lock.json",
     ],
   );
+});
+
+test("the gate runs every browser spec the branch adds or changes on upstream's tag", (t) => {
+  const repo = mkdtempSync(path.join(os.tmpdir(), "fork-specs-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const git = (...args) => {
+    const identity = ["-c", "user.name=fork", "-c", "user.email=fork@example.invalid"];
+    const unsigned = ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+    const result = spawnSync("git", [...identity, ...unsigned, ...args], {
+      cwd: repo,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  const write = (file, text) => {
+    mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+    writeFileSync(path.join(repo, file), text);
+  };
+  const browser = "packages/app/e2e/browser";
+  git("init", "-q");
+  write(`${browser}/untouched.spec.ts`, "upstream's spec\n");
+  write(`${browser}/changed.spec.ts`, "upstream's spec, which a feature changes\n");
+  write(`${browser}/removed.spec.ts`, "upstream's spec, which a feature removes\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "upstream");
+  git("tag", "v0.11.4");
+  write(`${browser}/changed.spec.ts`, "the feature's change\n");
+  write(`${browser}/added.spec.ts`, "the feature's spec\n");
+  write(`${browser}/added.real.spec.ts`, "a spec that needs a real provider\n");
+  write("packages/app/e2e/support/helpers/added.ts", "a helper\n");
+  write("packages/app/src/added.spec.ts", "a spec outside the browser folder\n");
+  rmSync(path.join(repo, browser, "removed.spec.ts"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "feat(app): a feature");
+  assert.deepEqual(branchSpecs("v0.11.4", { cwd: repo }), [
+    "e2e/browser/added.spec.ts",
+    "e2e/browser/changed.spec.ts",
+  ]);
 });
 
 test("a feature whose Upstream trailer is none is fork-only", () => {
