@@ -38,6 +38,8 @@ import {
 } from "@/stores/session-store";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
 import { sendOsNotification } from "@/utils/os-notifications";
+import { isWorkspaceCountedForAttention } from "@/utils/attention-projects";
+import { getCachedAppSettings } from "@/hooks/use-settings";
 import { getIsAppActivelyVisible, getIsAppVisible } from "@/utils/app-visibility";
 import {
   getInitKey,
@@ -309,6 +311,15 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (!notification) {
         return;
       }
+      if (
+        !isWorkspaceCountedForAttention({
+          preference: getCachedAppSettings(queryClient).attentionProjects,
+          workspaces: session?.workspaces,
+          workspaceId: notification.data.workspaceId,
+        })
+      ) {
+        return;
+      }
 
       void sendOsNotification({
         title: notification.title,
@@ -316,7 +327,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         data: notification.data,
       });
     },
-    [serverId],
+    [queryClient, serverId],
   );
 
   useEffect(() => {
@@ -689,13 +700,23 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       if (!message.payload.shouldNotify) {
         return;
       }
+      const terminalServerId = message.payload.serverId ?? serverId;
+      if (
+        !isWorkspaceCountedForAttention({
+          preference: getCachedAppSettings(queryClient).attentionProjects,
+          workspaces: useSessionStore.getState().sessions[terminalServerId]?.workspaces,
+          workspaceId: message.payload.workspaceId,
+        })
+      ) {
+        return;
+      }
       void sendOsNotification({
         title: message.payload.title,
         body: message.payload.body,
         // serverId + workspaceId + terminalId route a tap to the terminal tab; cwd is
         // carried as a fallback identifier when the daemon resolved no workspace.
         data: {
-          serverId: message.payload.serverId ?? serverId,
+          serverId: terminalServerId,
           terminalId: message.payload.terminalId,
           cwd: message.payload.cwd,
           ...(message.payload.workspaceId ? { workspaceId: message.payload.workspaceId } : {}),

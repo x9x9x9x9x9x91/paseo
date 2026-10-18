@@ -20,6 +20,11 @@ import {
 } from "@/components/sidebar/display-preferences/row-items";
 import { isNative } from "@/constants/platform";
 import {
+  AttentionProjectsSchema,
+  DEFAULT_ATTENTION_PROJECTS,
+  type AttentionProjects,
+} from "@/utils/attention-projects";
+import {
   DEFAULT_CONTENT_MAX_WIDTH,
   FONT_SIZE,
   PLUGIN_THEME_PREFERENCE,
@@ -107,6 +112,8 @@ export interface AppSettings {
   /** Desktop-only preferences for implicit opens into the ordinary side pane. */
   openInSidePane: OpenInSidePanePreferences;
   pullRequestOpenLocation: PullRequestOpenLocation;
+  /** Which projects count toward the dock badge and raise OS notifications. */
+  attentionProjects: AttentionProjects;
 }
 
 export type AppSettingsUpdate =
@@ -162,6 +169,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   vimKeybindings: false,
   openInSidePane: DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
   pullRequestOpenLocation: "explorer",
+  attentionProjects: DEFAULT_ATTENTION_PROJECTS,
 };
 
 export const DEFAULT_APP_SETTINGS: Settings = {
@@ -284,6 +292,7 @@ const StoredAppSettingsSchema = z
         legacyPullRequestsInSidePane: undefined,
       }),
     pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
+    attentionProjects: AttentionProjectsSchema,
     // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
     openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
     // COMPAT(rendererDesktopSettings): these fields used to share this renderer-owned key.
