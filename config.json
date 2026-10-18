@@ -1,0 +1,28 @@
+{
+  "agents": {
+    "providers": {
+      "claude": {
+        "env": {
+          "ANTHROPIC_API_KEY": "qa-key-builtin",
+          "ANTHROPIC_BASE_URL": "http://127.0.0.1:7801",
+          "CLAUDE_CONFIG_DIR": "/tmp/paseo-naming-qa/branch/claude-builtin",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+        }
+      },
+      "claude-private": {
+        "extends": "claude",
+        "label": "Claude (private)",
+        "env": {
+          "ANTHROPIC_API_KEY": "qa-key-private",
+          "ANTHROPIC_BASE_URL": "http://127.0.0.1:7802",
+          "CLAUDE_CONFIG_DIR": "/tmp/paseo-naming-qa/branch/claude-private",
+          "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+        }
+      },
+      "codex": { "enabled": false },
+      "copilot": { "enabled": false },
+      "opencode": { "enabled": false },
+      "pi": { "enabled": false }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{"at":"2026-10-18T12:18:11.619Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"HEAD /api/hello","model":null,"firstMessageInBody":false}
+{"at":"2026-10-18T12:18:11.619Z","endpoint":"claude-private (127.0.0.1:7802)","request":"HEAD /api/hello","model":null,"firstMessageInBody":false}
+{"at":"2026-10-18T12:18:11.838Z","endpoint":"claude-private (127.0.0.1:7802)","request":"HEAD /api/hello","model":null,"firstMessageInBody":false}
+{"at":"2026-10-18T12:18:11.843Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"HEAD /api/hello","model":null,"firstMessageInBody":false}
+{"at":"2026-10-18T12:18:11.951Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:12.030Z","endpoint":"claude-private (127.0.0.1:7802)","request":"HEAD /api/hello","model":null,"firstMessageInBody":false}
+{"at":"2026-10-18T12:18:12.140Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:12.581Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:12.733Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:13.733Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:13.940Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:15.946Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:16.312Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:20.179Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:20.476Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:29.146Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:30.236Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:46.874Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:18:46.915Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:19:21.012Z","endpoint":"claude-private (127.0.0.1:7802)","request":"POST /v1/messages?beta=true","model":"claude-opus-5-5","firstMessageInBody":true}
+{"at":"2026-10-18T12:19:24.599Z","endpoint":"built-in claude (127.0.0.1:7801)","request":"POST /v1/messages?beta=true","model":"claude-haiku-4-5","firstMessageInBody":true}
