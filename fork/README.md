@@ -29,7 +29,7 @@ Electron's updater on macOS installs a build only when it satisfies the running 
 A run asks GitHub for upstream's latest release (published, not a prerelease), then:
 
 1. A newer upstream release: rebase the branch onto its tag. On a conflict, a headless agent tries once; it reaches sin0's model proxy through an ssh tunnel, since sincoder has no login of its own. If it cannot resolve the conflict, Tim gets a notice with the conflict and the app stays on the last release.
-2. Check: typecheck, lint, format, this folder's tests, the app's unit tests, the daemon patch's tests and the features' Playwright specs (every browser spec the branch adds or changes on upstream's tag, read from the branch, so a new feature's spec runs with nothing to list), on the Node major upstream's release workflow uses.
+2. Check: typecheck, lint, format, this folder's tests, the app's unit tests, the daemon patch's tests and the features' Playwright specs (every browser spec the branch adds or changes on upstream's tag, read from the branch, so a new feature's spec runs with nothing to list; a feature is gated by the spec it adds or changes, and a branch that changes the app with none fails the run), on the Node major upstream's release workflow uses.
 3. Build the arm64 app, signed with `Developer ID Application: Tim Roth (HKM8HFGKC6)` and notarized, then verify the signature, the notarization, the version and the feed inside the app.
 4. Push the rebased branch and publish the release, with `latest-mac.yml`, the zip and dmg and their blockmaps, marked latest.
 

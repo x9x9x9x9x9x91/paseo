@@ -476,22 +476,37 @@ function gate({ runDir, env, specs }) {
     ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
   ];
-  // Without a spec named, the step would run every one of upstream's.
+  // Without a spec named, the step would run every one of upstream's. None comes back only for
+  // a branch that leaves the app alone (branchSpecs).
   if (specs.length > 0) {
     steps.push(["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...specs]]);
   } else {
-    log("  e2e skipped: no feature adds or changes a browser spec");
+    log("  e2e skipped: the branch does not change the app");
   }
   runSteps(steps, { runDir, env });
 }
 
-/** The app's browser specs the branch adds or changes against `tag`, as the e2e step names them. */
+/**
+ * The app's browser specs the branch adds or changes against `tag`, as the e2e step names them.
+ * A branch that changes the app has at least one, or the gate would publish its features untested.
+ */
 export function branchSpecs(tag, { runDir, cwd } = {}) {
-  const changed = git(["diff", "--name-only", "--diff-filter=d", tag, "HEAD"], { runDir, cwd });
-  return changed
+  const changed = git(
+    ["-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=d", tag, "HEAD"],
+    { runDir, cwd },
+  )
     .split("\n")
+    .filter(Boolean);
+  const specs = changed
     .filter((file) => BROWSER_SPEC.test(file) && !REAL_SPEC.test(file))
     .map((file) => file.slice(APP_DIR.length));
+  if (specs.length === 0 && changed.some((file) => file.startsWith(APP_DIR))) {
+    throw new StepFailure(
+      "specs",
+      `the branch changes the app on ${tag} but adds or changes no browser spec under ${APP_DIR}e2e/browser, so the gate would not test its features`,
+    );
+  }
+  return specs;
 }
 
 function checkScope(tag, runDir) {
