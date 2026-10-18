@@ -28,7 +28,7 @@ export const UPSTREAM_REPO = "getpaseo/paseo";
 export const RELEASE_BRANCH = "fork/release";
 // Upstream pull requests that carry this branch's feature commits. Once all of them are in an
 // upstream stable release, the fork has nothing left to add and retires.
-export const UPSTREAM_PULLS = [7176];
+export const UPSTREAM_PULLS = [7176, 7313];
 // The fork's own commits (the update feed, this job) say so in their subject; every other
 // commit on the branch is a feature upstream does not have yet.
 const FORK_SUBJECT = /^fork: /;
@@ -48,9 +48,11 @@ const DAEMON_PATCH_FILES = [
   "packages/server/src/server/worktree-branch-name-generator.ts",
 ];
 const DAEMON_PATCH_TESTS = [
+  "src/server/agent/create-agent/create.test.ts",
   "src/server/agent/mcp-server.test.ts",
   "src/server/agent/structured-generation-providers.test.ts",
   "src/server/session/checkout/git-metadata-generator.test.ts",
+  "src/server/schedule/service.test.ts",
   "src/server/session.workspaces.test.ts",
   "src/server/worktree-branch-name-generator.test.ts",
 ];
