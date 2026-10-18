@@ -317,7 +317,7 @@ Paseo tools; otherwise the provider policy applies. Provider and global policy a
 session is created, resumed, imported, or reloaded, so configuration changes affect the next
 session rather than an already-running one.
 
-`agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available. When the prompt comes from an agent on a custom provider (a new workspace's first agent; for commit and PR text, any agent working in that worktree), only that provider's candidates are tried, and a failure generates nothing. Agents on two different custom providers in one worktree, or a custom provider that is disabled or removed, leave nothing to try; the daemon logs which.
+`agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available. When the prompt comes from an agent on a custom provider, only that provider is tried; [Agents on a custom provider](../public-docs/metadata-generation.md#agents-on-a-custom-provider) has the rule.
 
 ### Git process limits
 
