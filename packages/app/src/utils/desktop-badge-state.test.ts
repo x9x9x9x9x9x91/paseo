@@ -5,13 +5,18 @@ import {
   isWorkspaceActionableForDesktopBadge,
   selectMacDockBadgeCount,
 } from "./desktop-badge-state";
+import { DEFAULT_ATTENTION_PROJECTS } from "./attention-projects";
 
-function workspace(id: string, status: WorkspaceDescriptor["status"]): WorkspaceDescriptor {
+function workspace(
+  id: string,
+  status: WorkspaceDescriptor["status"],
+  projectId = "project-1",
+): WorkspaceDescriptor {
   return {
     createdAt: null,
     lastUserMessageAt: null,
     id,
-    projectId: "project-1",
+    projectId,
     projectDisplayName: "Project 1",
     projectRootPath: "/repo",
     workspaceDirectory: "/repo",
@@ -48,7 +53,9 @@ describe("desktop-badge-state", () => {
 
   it("returns undefined when no visible workspaces need attention", () => {
     expect(
-      selectMacDockBadgeCount(stateWith(workspace("a", "done"), workspace("b", "running"))),
+      selectMacDockBadgeCount(stateWith(workspace("a", "done"), workspace("b", "running")), {
+        attentionProjects: DEFAULT_ATTENTION_PROJECTS,
+      }),
     ).toBeUndefined();
   });
 
@@ -70,7 +77,31 @@ describe("desktop-badge-state", () => {
         },
       },
     };
-    expect(selectMacDockBadgeCount(state)).toBe(3);
+    expect(selectMacDockBadgeCount(state, { attentionProjects: DEFAULT_ATTENTION_PROJECTS })).toBe(
+      3,
+    );
+  });
+
+  it("counts only workspaces of the chosen projects", () => {
+    const state = stateWith(
+      workspace("chat-a", "attention", "prj_chats"),
+      workspace("chat-b", "done", "prj_chats"),
+      workspace("chat-c", "needs_input", "prj_chats"),
+      workspace("build", "attention", "prj_builds"),
+      workspace("added-later", "failed", "prj_added_later"),
+    );
+
+    expect(selectMacDockBadgeCount(state, { attentionProjects: DEFAULT_ATTENTION_PROJECTS })).toBe(
+      4,
+    );
+    expect(
+      selectMacDockBadgeCount(state, {
+        attentionProjects: { scope: "chosen", projectIds: ["prj_chats", "prj_removed"] },
+      }),
+    ).toBe(2);
+    expect(
+      selectMacDockBadgeCount(state, { attentionProjects: { scope: "chosen", projectIds: [] } }),
+    ).toBeUndefined();
   });
 
   it("leaves out background workspaces, which the sidebar hides", () => {
@@ -86,7 +117,9 @@ describe("desktop-badge-state", () => {
   });
 
   it("recounts only when a workspace map is replaced", () => {
-    const select = createMacDockBadgeCountSelector();
+    const select = createMacDockBadgeCountSelector({
+      attentionProjects: DEFAULT_ATTENTION_PROJECTS,
+    });
     const state = stateWith(workspace("a", "attention"));
     expect(select(state)).toBe(1);
 
