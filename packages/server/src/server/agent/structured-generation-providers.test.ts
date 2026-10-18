@@ -234,3 +234,125 @@ describe("resolveStructuredGenerationProviders", () => {
     expect(snapshots.calls).toEqual([{ cwd: "/tmp/repo", wait: true }]);
   });
 });
+
+describe("resolveStructuredGenerationProviders with a custom source provider", () => {
+  const builtinEntry: ProviderSnapshotEntry = {
+    provider: "claude",
+    status: READY,
+    enabled: true,
+    source: "builtin",
+    models: [
+      { provider: "claude", id: "claude-opus-5-5", label: "Opus 5.5", isDefault: true },
+      { provider: "claude", id: "claude-haiku-4-5", label: "Haiku 4.5" },
+    ],
+  };
+  const customEntry: ProviderSnapshotEntry = {
+    provider: "claude-zdr",
+    status: READY,
+    enabled: true,
+    source: "custom",
+    models: [
+      {
+        provider: "claude-zdr",
+        id: "claude-opus-5-5[1m]",
+        label: "Opus 5.5 1M",
+        isDefault: true,
+      },
+      { provider: "claude-zdr", id: "claude-haiku-5-5", label: "Haiku 5.5" },
+    ],
+  };
+  const entries = [builtinEntry, customEntry];
+
+  test("tries only the custom provider, its own Haiku before its default model", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots(entries),
+      sourceProviders: ["claude-zdr"],
+    });
+
+    expect(providers).toEqual([
+      { provider: "claude-zdr", model: "claude-haiku-5-5" },
+      { provider: "claude-zdr", model: "claude-opus-5-5[1m]" },
+    ]);
+  });
+
+  test("keeps configured entries for the custom provider and drops the others", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots(entries),
+      daemonConfig: {
+        metadataGeneration: {
+          providers: [
+            { provider: "claude", model: "claude-haiku-4-5" },
+            { provider: "claude-zdr", model: "claude-haiku-5-5", thinkingOptionId: "low" },
+          ],
+        },
+      },
+      currentSelection: { provider: "claude", model: "claude-opus-5-5" },
+      sourceProviders: ["claude-zdr"],
+    });
+
+    expect(providers).toEqual([
+      { provider: "claude-zdr", model: "claude-haiku-5-5", thinkingOptionId: "low" },
+      { provider: "claude-zdr", model: "claude-haiku-5-5" },
+      { provider: "claude-zdr", model: "claude-opus-5-5[1m]" },
+    ]);
+  });
+
+  test("uses the current selection when it is on the custom provider", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots(entries),
+      currentSelection: { provider: "claude-zdr", model: "claude-opus-5-5[1m]" },
+      sourceProviders: ["claude-zdr"],
+    });
+
+    expect(providers).toEqual([
+      { provider: "claude-zdr", model: "claude-haiku-5-5" },
+      { provider: "claude-zdr", model: "claude-opus-5-5[1m]" },
+    ]);
+  });
+
+  test("pins to the first custom provider among the sources", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots(entries),
+      sourceProviders: [undefined, "claude", "claude-zdr"],
+    });
+
+    expect(providers.map((provider) => provider.provider)).toEqual(["claude-zdr", "claude-zdr"]);
+  });
+
+  test("offers no other provider when the custom provider is disabled", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots([
+        builtinEntry,
+        { ...customEntry, enabled: false },
+      ]),
+      sourceProviders: ["claude-zdr"],
+    });
+
+    expect(providers).toEqual([{ provider: "claude-zdr" }]);
+  });
+
+  test("offers no other provider when the source provider is gone from the config", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots([builtinEntry]),
+      sourceProviders: ["claude-zdr"],
+    });
+
+    expect(providers).toEqual([{ provider: "claude-zdr" }]);
+  });
+
+  test("a built-in source provider keeps the usual order", async () => {
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots(entries),
+      sourceProviders: ["claude"],
+    });
+
+    expect(providers).toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
+  });
+});

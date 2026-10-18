@@ -180,14 +180,21 @@ export function createAgentStructuredTextGeneration(deps: {
   getFocusedSelection: (
     cwd: string,
   ) => ResolveStructuredGenerationProvidersOptions["currentSelection"];
+  /** Providers of the agents working in the checkout, whose changes the diff carries. */
+  getCheckoutAgentProviders?: (cwd: string) => string[];
 }): StructuredTextGeneration {
   return {
     async generate({ cwd, prompt, schema, schemaName, agentTitle }) {
+      const currentSelection = deps.getFocusedSelection(cwd);
       const providers = await resolveStructuredGenerationProviders({
         cwd,
         providerSnapshotManager: deps.providerSnapshotManager,
         daemonConfig: deps.readDaemonConfig(),
-        currentSelection: deps.getFocusedSelection(cwd),
+        currentSelection,
+        sourceProviders: [
+          currentSelection?.provider,
+          ...(deps.getCheckoutAgentProviders?.(cwd) ?? []),
+        ],
       });
       return generateStructuredAgentResponseWithFallback({
         manager: deps.agentManager,

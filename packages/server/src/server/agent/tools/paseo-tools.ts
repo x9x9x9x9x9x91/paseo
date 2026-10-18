@@ -1580,9 +1580,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         // COMPAT(nestedCreateAgentPlacement): accept the old relationship/workspace shape without
         // advertising it to models. Added in v0.2.0; remove after 2027-01-17.
         const parsed = legacyAgentToAgentCreateAgentArgsSchema.parse(args);
-        const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(parsed.workspace, {
-          prompt: parsed.initialPrompt,
-        });
+        const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(
+          parsed.workspace,
+          firstAgentContextFor(parsed),
+        );
         return {
           kind: "agent-scoped",
           parsedArgs: parsed,
@@ -1593,9 +1594,10 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
         };
       }
       const parsed = agentToAgentCreateAgentArgsSchema.parse(args);
-      const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(parsed.workspaceId, {
-        prompt: parsed.initialPrompt,
-      });
+      const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(
+        parsed.workspaceId,
+        firstAgentContextFor(parsed),
+      );
       return {
         kind: "agent-scoped",
         parsedArgs: parsed,
@@ -1618,7 +1620,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       }
       const { cwd, workspaceId, worktree } = await resolveCreateAgentWorkspace(
         parsedArgs.workspace,
-        { prompt: parsedArgs.initialPrompt },
+        firstAgentContextFor(parsedArgs),
       );
       return {
         kind: "top-level",
@@ -1632,7 +1634,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
     const parsedArgs = canonicalTopLevelCreateAgentArgsSchema.parse(args);
     const { cwd, workspaceId } = await resolveCanonicalCreateAgentWorkspace(
       parsedArgs.workspaceId,
-      { prompt: parsedArgs.initialPrompt },
+      firstAgentContextFor(parsedArgs),
     );
     return {
       kind: "top-level",
@@ -1641,6 +1643,18 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       cwd,
       workspaceId,
       worktree: undefined,
+    };
+  }
+
+  // The new agent's provider travels with its prompt, so naming a workspace made for it stays on
+  // a custom provider.
+  function firstAgentContextFor(args: {
+    initialPrompt: string;
+    provider: string;
+  }): FirstAgentContext {
+    return {
+      prompt: args.initialPrompt,
+      provider: resolveRequiredProviderModel(args.provider).provider,
     };
   }
 
