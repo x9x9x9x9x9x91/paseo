@@ -2092,6 +2092,19 @@ export const ko: TranslationResources = {
       sentTitle: "테스트 알림을 보냈습니다",
       sentDescription: "Paseo가 알림을 운영 체제에 전달했습니다.",
       sendFailedTitle: "테스트 알림을 보낼 수 없음",
+      projects: {
+        title: "배지 및 알림",
+        info: "이 프로젝트의 워크스페이스만 Dock 배지에 집계되고 알림을 표시합니다. 모든 워크스페이스는 사이드바에 계속 상태를 표시합니다.",
+        scope: {
+          label: "프로젝트",
+          hint: "선택한 프로젝트 모드에서는 새 프로젝트를 켜기 전까지 꺼진 상태로 유지됩니다",
+          options: {
+            all: "모든 프로젝트",
+            chosen: "선택한 프로젝트",
+          },
+        },
+        empty: "아직 프로젝트가 없습니다",
+      },
     },
     hostSections: {
       projects: "프로젝트",

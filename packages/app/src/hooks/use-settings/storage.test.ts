@@ -361,6 +361,22 @@ describe("loadAppSettingsFromStorage", () => {
     expect(legacySide.openInSidePane).not.toHaveProperty("pullRequests");
   });
 
+  it("counts every project by default and keeps a stored choice of projects", async () => {
+    const defaults = await loadAppSettingsFromStorage(makeDeps());
+    const chosen = await loadAppSettingsFromStorage(
+      makeDeps({
+        storage: createInMemoryKeyValueStorage({
+          [APP_SETTINGS_KEY]: JSON.stringify({
+            attentionProjects: { scope: "chosen", projectIds: ["prj_chats"] },
+          }),
+        }),
+      }),
+    );
+
+    expect(defaults.attentionProjects).toEqual({ scope: "all", projectIds: [] });
+    expect(chosen.attentionProjects).toEqual({ scope: "chosen", projectIds: ["prj_chats"] });
+  });
+
   it("uses the native terminal renderer by default", async () => {
     const deps = makeDeps();
 

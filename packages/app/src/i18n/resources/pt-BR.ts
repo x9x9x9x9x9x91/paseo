@@ -2115,6 +2115,19 @@ export const ptBR: TranslationResources = {
       sentTitle: "Notificação de teste enviada",
       sentDescription: "O Paseo entregou a notificação ao sistema operacional.",
       sendFailedTitle: "Não foi possível enviar a notificação de teste",
+      projects: {
+        title: "Selo e notificações",
+        info: "Somente os espaços de trabalho destes projetos contam para o selo do Dock e geram notificações. Todo espaço de trabalho continua mostrando seu estado na barra lateral.",
+        scope: {
+          label: "Projetos",
+          hint: "Com projetos escolhidos, um projeto novo fica desativado até você ativá-lo",
+          options: {
+            all: "Todos os projetos",
+            chosen: "Projetos escolhidos",
+          },
+        },
+        empty: "Nenhum projeto ainda",
+      },
     },
     hostSections: {
       projects: "Projetos",
