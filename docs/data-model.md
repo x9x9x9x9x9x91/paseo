@@ -317,7 +317,7 @@ Paseo tools; otherwise the provider policy applies. Provider and global policy a
 session is created, resumed, imported, or reloaded, so configuration changes affect the next
 session rather than an already-running one.
 
-`agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available. When the prompt comes from an agent on a custom provider (a new workspace's first agent; for commit and PR text, the focused agent or another agent in that checkout), only that provider's candidates are tried, and a failure generates nothing.
+`agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available. When the prompt comes from an agent on a custom provider (a new workspace's first agent; for commit and PR text, any agent working in that worktree), only that provider's candidates are tried, and a failure generates nothing. Agents on two different custom providers in one worktree, or a custom provider that is disabled or removed, leave nothing to try; the daemon logs which.
 
 ### Git process limits
 
@@ -352,8 +352,6 @@ Environment variables override `config.json`:
 `PASEO_GIT_MAX_PROCESS_CONCURRENCY` wins when it and the legacy alias are both set. Run `paseo reload`
 after changing `config.json`. Environment changes require a daemon restart; the launch environment
 remains authoritative during reload.
-
-`agents.metadataGeneration.providers` controls the preferred structured-generation fallback order for daemon-side metadata tasks such as commit messages, PR text, branch names, and generated agent titles. Entries are tried first in the configured order, then Paseo falls through to dynamically discovered defaults and finally the current selection when available. When the prompt comes from an agent on a custom provider (a new workspace's first agent; for commit and PR text, the focused agent or another agent in that checkout), only that provider's candidates are tried, and a failure generates nothing.
 
 Local speech model ids are intentionally narrow: STT uses `parakeet-tdt-0.6b-v2-int8`, TTS uses `kokoro-en-v0_19`, and turn detection uses the bundled Silero VAD model.
 

@@ -153,13 +153,28 @@ describe("createGitMetadataGenerator", () => {
 });
 
 describe("createAgentStructuredTextGeneration", () => {
+  interface CheckoutAgent {
+    id: string;
+    cwd: string;
+    provider: string;
+    model?: string;
+  }
+
   // Every provider reads as unavailable, so the attempts record exactly which ones were tried.
   async function attemptedProviders(input: {
-    focusedProvider?: string;
-    checkoutAgentProviders: string[];
-  }): Promise<string[]> {
+    paneCwd?: string;
+    agents: CheckoutAgent[];
+    focusedAgentId?: string;
+  }): Promise<Array<{ provider: string; model: string | null }>> {
     const generation = createAgentStructuredTextGeneration({
       agentManager: {
+        listAgents: () =>
+          input.agents.map((agent) => ({
+            id: agent.id,
+            cwd: agent.cwd,
+            provider: agent.provider,
+            config: { provider: agent.provider, cwd: agent.cwd, model: agent.model },
+          })),
         getProviderAvailability: async (provider: string) => ({
           provider,
           available: false,
@@ -173,7 +188,10 @@ describe("createAgentStructuredTextGeneration", () => {
             status: "ready" as const,
             enabled: true,
             source: "builtin" as const,
-            models: [{ provider: "claude", id: "claude-haiku-4-5", label: "Haiku" }],
+            models: [
+              { provider: "claude", id: "claude-haiku-4-5", label: "Haiku" },
+              { provider: "claude", id: "claude-opus-5-5", label: "Opus" },
+            ],
           },
           {
             provider: "claude-zdr",
@@ -182,16 +200,22 @@ describe("createAgentStructuredTextGeneration", () => {
             source: "custom" as const,
             models: [{ provider: "claude-zdr", id: "claude-haiku-5-5", label: "Haiku" }],
           },
+          {
+            provider: "claude-work",
+            status: "ready" as const,
+            enabled: true,
+            source: "custom" as const,
+            models: [{ provider: "claude-work", id: "claude-haiku-5-5", label: "Haiku" }],
+          },
         ],
       },
       readDaemonConfig: () => ({}),
-      getFocusedSelection: () =>
-        input.focusedProvider ? { provider: input.focusedProvider } : undefined,
-      getCheckoutAgentProviders: () => input.checkoutAgentProviders,
+      resolveCheckoutRoot: async () => "/repo",
+      getFocusedAgentId: () => input.focusedAgentId,
     });
     const error = await generation
       .generate({
-        cwd: "/repo",
+        cwd: input.paneCwd ?? "/repo",
         prompt: "Write a commit message",
         schema: z.object({ message: z.string() }),
         schemaName: "CommitMessage",
@@ -201,24 +225,72 @@ describe("createAgentStructuredTextGeneration", () => {
     if (!(error instanceof StructuredAgentFallbackError)) {
       throw new Error("expected every provider to be tried and refused");
     }
-    return error.attempts.map((attempt) => attempt.provider);
+    return error.attempts.map((attempt) => ({ provider: attempt.provider, model: attempt.model }));
   }
 
   it("keeps a checkout with an agent on a custom provider on that provider", async () => {
     await expect(
-      attemptedProviders({ checkoutAgentProviders: ["claude", "claude-zdr"] }),
-    ).resolves.toEqual(["claude-zdr"]);
+      attemptedProviders({
+        agents: [
+          { id: "builtin", cwd: "/repo", provider: "claude" },
+          { id: "private", cwd: "/repo", provider: "claude-zdr" },
+        ],
+      }),
+    ).resolves.toEqual([{ provider: "claude-zdr", model: "claude-haiku-5-5" }]);
   });
 
-  it("follows a focused agent on a custom provider", async () => {
+  it("counts agents anywhere in the worktree for a pane on a subdirectory", async () => {
+    const paneCwd = "/repo/packages/app";
     await expect(
-      attemptedProviders({ focusedProvider: "claude-zdr", checkoutAgentProviders: [] }),
-    ).resolves.toEqual(["claude-zdr"]);
+      attemptedProviders({
+        paneCwd,
+        agents: [{ id: "private", cwd: "/repo", provider: "claude-zdr" }],
+      }),
+    ).resolves.toEqual([{ provider: "claude-zdr", model: "claude-haiku-5-5" }]);
+    await expect(
+      attemptedProviders({
+        paneCwd,
+        agents: [{ id: "private", cwd: "/repo/packages/server", provider: "claude-zdr" }],
+      }),
+    ).resolves.toEqual([{ provider: "claude-zdr", model: "claude-haiku-5-5" }]);
+  });
+
+  it("ignores agents outside the worktree", async () => {
+    await expect(
+      attemptedProviders({
+        agents: [{ id: "private", cwd: "/repo-other", provider: "claude-zdr" }],
+      }),
+    ).resolves.toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
+  });
+
+  it("uses the focused agent's model last when it works at the worktree root", async () => {
+    await expect(
+      attemptedProviders({
+        paneCwd: "/repo/packages/app",
+        agents: [{ id: "focused", cwd: "/repo", provider: "claude", model: "claude-opus-5-5" }],
+        focusedAgentId: "focused",
+      }),
+    ).resolves.toEqual([
+      { provider: "claude", model: "claude-haiku-4-5" },
+      { provider: "claude", model: "claude-opus-5-5" },
+    ]);
+  });
+
+  it("tries nothing when agents in the checkout are on two custom providers", async () => {
+    await expect(
+      attemptedProviders({
+        agents: [
+          { id: "private", cwd: "/repo", provider: "claude-zdr" },
+          { id: "work", cwd: "/repo/packages/server", provider: "claude-work" },
+        ],
+        focusedAgentId: "private",
+      }),
+    ).resolves.toEqual([]);
   });
 
   it("keeps the usual providers when the checkout's agents are on built-in ones", async () => {
-    await expect(attemptedProviders({ checkoutAgentProviders: ["claude"] })).resolves.toEqual([
-      "claude",
-    ]);
+    await expect(
+      attemptedProviders({ agents: [{ id: "builtin", cwd: "/repo", provider: "claude" }] }),
+    ).resolves.toEqual([{ provider: "claude", model: "claude-haiku-4-5" }]);
   });
 });

@@ -6,6 +6,14 @@ import type { ProviderSnapshotEntry } from "./agent-sdk-types.js";
 const READY = "ready" as const;
 const ERROR = "error" as const;
 
+class WarnLog {
+  readonly warnings: Array<{ obj: object; msg?: string }> = [];
+
+  warn(obj: object, msg?: string) {
+    this.warnings.push({ obj, msg });
+  }
+}
+
 class ProviderSnapshots {
   readonly calls: Array<{ cwd?: string; wait?: boolean }> = [];
 
@@ -313,37 +321,77 @@ describe("resolveStructuredGenerationProviders with a custom source provider", (
     ]);
   });
 
-  test("pins to the first custom provider among the sources", async () => {
+  test("pins to the custom provider among built-in sources", async () => {
     const providers = await resolveStructuredGenerationProviders({
       cwd: "/tmp/repo",
       providerSnapshotManager: new ProviderSnapshots(entries),
-      sourceProviders: [undefined, "claude", "claude-zdr"],
+      sourceProviders: [undefined, "claude", "claude-zdr", "claude-zdr"],
     });
 
     expect(providers.map((provider) => provider.provider)).toEqual(["claude-zdr", "claude-zdr"]);
   });
 
-  test("offers nothing when the custom provider is disabled", async () => {
+  test("offers nothing and logs both when the sources hold two custom providers", async () => {
+    const workEntry: ProviderSnapshotEntry = {
+      ...customEntry,
+      provider: "claude-work",
+      models: [{ provider: "claude-work", id: "claude-haiku-5-5", label: "Haiku 5.5" }],
+    };
+    const log = new WarnLog();
+    const providers = await resolveStructuredGenerationProviders({
+      cwd: "/tmp/repo",
+      providerSnapshotManager: new ProviderSnapshots([...entries, workEntry]),
+      currentSelection: { provider: "claude-zdr", model: "claude-opus-5-5[1m]" },
+      sourceProviders: ["claude-zdr", "claude", "claude-work"],
+      logger: log,
+    });
+
+    expect(providers).toEqual([]);
+    expect(log.warnings).toEqual([
+      {
+        obj: { providers: ["claude-zdr", "claude-work"] },
+        msg: "Structured generation skipped: agents on different custom providers",
+      },
+    ]);
+  });
+
+  test("offers nothing and logs the provider when the custom provider is disabled", async () => {
+    const log = new WarnLog();
     const providers = await resolveStructuredGenerationProviders({
       cwd: "/tmp/repo",
       providerSnapshotManager: new ProviderSnapshots([
         builtinEntry,
         { ...customEntry, enabled: false },
       ]),
-      sourceProviders: ["claude-zdr"],
+      sourceProviders: ["claude", "claude-zdr"],
+      logger: log,
     });
 
     expect(providers).toEqual([]);
+    expect(log.warnings).toEqual([
+      {
+        obj: { provider: "claude-zdr", reason: "disabled" },
+        msg: "Structured generation skipped: custom provider unavailable",
+      },
+    ]);
   });
 
-  test("offers nothing when the source provider is gone from the config", async () => {
+  test("offers nothing and logs the provider when it is gone from the config", async () => {
+    const log = new WarnLog();
     const providers = await resolveStructuredGenerationProviders({
       cwd: "/tmp/repo",
       providerSnapshotManager: new ProviderSnapshots([builtinEntry]),
       sourceProviders: ["claude-zdr"],
+      logger: log,
     });
 
     expect(providers).toEqual([]);
+    expect(log.warnings).toEqual([
+      {
+        obj: { provider: "claude-zdr", reason: "not configured" },
+        msg: "Structured generation skipped: custom provider unavailable",
+      },
+    ]);
   });
 
   test("a built-in source provider keeps the usual order", async () => {

@@ -3,12 +3,13 @@ import {
   StructuredAgentFallbackError,
   StructuredAgentResponseError,
   generateStructuredAgentResponseWithFallback,
+  type StructuredGenerationLogger,
 } from "../../agent/agent-response-loop.js";
 import type { AgentManager } from "../../agent/agent-manager.js";
 import type { ProviderSnapshotManager } from "../../agent/provider-snapshot-manager.js";
 import {
+  readAgentGenerationSelection,
   resolveStructuredGenerationProviders,
-  type ResolveStructuredGenerationProvidersOptions,
   type StructuredGenerationDaemonConfig,
 } from "../../agent/structured-generation-providers.js";
 import type { WorkspaceGitService } from "../../workspace-git-service.js";
@@ -16,6 +17,7 @@ import {
   buildMetadataPrompt,
   type MetadataConfigKey,
 } from "../../../utils/build-metadata-prompt.js";
+import { isRealpathInsideRoot } from "../../../utils/path.js";
 
 export interface PullRequestText {
   title: string;
@@ -177,24 +179,30 @@ export function createAgentStructuredTextGeneration(deps: {
   agentManager: AgentManager;
   providerSnapshotManager: Pick<ProviderSnapshotManager, "listProviders">;
   readDaemonConfig: () => StructuredGenerationDaemonConfig;
-  getFocusedSelection: (
-    cwd: string,
-  ) => ResolveStructuredGenerationProvidersOptions["currentSelection"];
-  /** Providers of the agents working in the checkout, whose changes the diff carries. */
-  getCheckoutAgentProviders?: (cwd: string) => string[];
+  /**
+   * The worktree root of the checkout at cwd. The diff is read at the root and a commit stages
+   * the whole worktree, so the agents whose changes it carries are the ones working at or under
+   * the root, wherever the pane's directory sits.
+   */
+  resolveCheckoutRoot: (cwd: string) => Promise<string>;
+  getFocusedAgentId: () => string | null | undefined;
+  logger?: StructuredGenerationLogger;
 }): StructuredTextGeneration {
   return {
     async generate({ cwd, prompt, schema, schemaName, agentTitle }) {
-      const currentSelection = deps.getFocusedSelection(cwd);
+      const checkoutRoot = await deps.resolveCheckoutRoot(cwd);
+      const checkoutAgents = deps.agentManager
+        .listAgents()
+        .filter((agent) => isRealpathInsideRoot(checkoutRoot, agent.cwd));
+      const focusedAgentId = deps.getFocusedAgentId();
+      const focusedAgent = checkoutAgents.find((agent) => agent.id === focusedAgentId);
       const providers = await resolveStructuredGenerationProviders({
         cwd,
         providerSnapshotManager: deps.providerSnapshotManager,
         daemonConfig: deps.readDaemonConfig(),
-        currentSelection,
-        sourceProviders: [
-          currentSelection?.provider,
-          ...(deps.getCheckoutAgentProviders?.(cwd) ?? []),
-        ],
+        currentSelection: focusedAgent ? readAgentGenerationSelection(focusedAgent) : undefined,
+        sourceProviders: checkoutAgents.map((agent) => agent.provider),
+        logger: deps.logger,
       });
       return generateStructuredAgentResponseWithFallback({
         manager: deps.agentManager,

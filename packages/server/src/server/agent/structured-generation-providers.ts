@@ -3,7 +3,11 @@ import type {
   AgentProvider,
   ProviderSnapshotEntry,
 } from "./agent-sdk-types.js";
-import type { StructuredGenerationProvider } from "./agent-response-loop.js";
+import type { ManagedAgent } from "./agent-manager.js";
+import type {
+  StructuredGenerationLogger,
+  StructuredGenerationProvider,
+} from "./agent-response-loop.js";
 import type { ProviderSnapshotManager } from "./provider-snapshot-manager.js";
 
 export interface StructuredGenerationDaemonConfig {
@@ -39,13 +43,25 @@ export interface ResolveStructuredGenerationProvidersOptions {
     thinkingOptionId?: string | null;
   };
   /**
-   * Providers of the agents whose words the prompt carries, most direct first: a new
-   * workspace's first agent, or the agents working in a checkout. The first custom provider
-   * among them is the only one tried, since a custom provider is how the user picks where
-   * their prompts go (a zero-retention endpoint, another account). Without one, every
-   * candidate is tried as before.
+   * Providers of the agents whose words the prompt carries: a new workspace's first agent, or
+   * the agents working in a checkout. A custom provider among them is the only one tried, since
+   * a custom provider is how the user picks where their prompts go (a zero-retention endpoint,
+   * another account). Two different custom providers leave nothing to try: neither is the
+   * user's pick for the other agent's words. Without one, every candidate is tried as before.
    */
   sourceProviders?: ReadonlyArray<AgentProvider | null | undefined>;
+  logger?: Pick<StructuredGenerationLogger, "warn">;
+}
+
+/** An agent's selection as the last candidate: what it runs now, else what it was created with. */
+export function readAgentGenerationSelection(
+  agent: Pick<ManagedAgent, "provider" | "config" | "runtimeInfo">,
+): NonNullable<ResolveStructuredGenerationProvidersOptions["currentSelection"]> {
+  return {
+    provider: agent.provider,
+    model: agent.runtimeInfo?.model ?? agent.config.model ?? null,
+    thinkingOptionId: agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null,
+  };
 }
 
 export async function resolveStructuredGenerationProviders(
@@ -59,8 +75,24 @@ export async function resolveStructuredGenerationProviders(
   const enabledEntries = providerEntries.filter((entry) => entry.enabled);
   const modelEntries = enabledEntries.filter((entry) => (entry.models?.length ?? 0) > 0);
   const entriesByProvider = new Map(enabledEntries.map((entry) => [entry.provider, entry]));
-  const pinnedProvider = resolvePinnedProvider(options.sourceProviders, providerEntries);
+  const customSourceProviders = readCustomSourceProviders(options.sourceProviders, providerEntries);
+  if (customSourceProviders.length > 1) {
+    options.logger?.warn(
+      { providers: customSourceProviders },
+      "Structured generation skipped: agents on different custom providers",
+    );
+    return [];
+  }
+  const pinnedProvider = customSourceProviders[0];
   if (pinnedProvider) {
+    if (!entriesByProvider.has(pinnedProvider)) {
+      const configured = providerEntries.some((entry) => entry.provider === pinnedProvider);
+      options.logger?.warn(
+        { provider: pinnedProvider, reason: configured ? "disabled" : "not configured" },
+        "Structured generation skipped: custom provider unavailable",
+      );
+      return [];
+    }
     return resolvePinnedProviders({
       pinnedProvider,
       configuredProviders,
@@ -102,10 +134,11 @@ export async function resolveStructuredGenerationProviders(
   return dedupeProviders(providers);
 }
 
-function resolvePinnedProvider(
+function readCustomSourceProviders(
   sourceProviders: ResolveStructuredGenerationProvidersOptions["sourceProviders"],
   providerEntries: readonly ProviderSnapshotEntry[],
-): AgentProvider | null {
+): AgentProvider[] {
+  const customProviders = new Set<AgentProvider>();
   for (const sourceProvider of sourceProviders ?? []) {
     const provider = sourceProvider?.trim();
     if (!provider) {
@@ -115,18 +148,17 @@ function resolvePinnedProvider(
     // config while an agent still runs on it: it pins too, and nothing runs.
     const entry = providerEntries.find((candidate) => candidate.provider === provider);
     if (!entry || entry.source === "custom") {
-      return provider;
+      customProviders.add(provider);
     }
   }
-  return null;
+  return Array.from(customProviders);
 }
 
 /**
- * The usual order kept to one provider: its configured entries, the defaults matched within its
- * own models, then the current selection, or the provider's default model when the selection
- * is another provider's. It has its own loop because the default matching picks the first
- * provider with a matching model, which would be a built-in one. A pinned provider that is
- * disabled or gone from the config leaves nothing to try.
+ * The usual order kept to one enabled provider: its configured entries, the defaults matched
+ * within its own models, then the current selection, or the provider's default model when the
+ * selection is another provider's. It has its own loop because the default matching picks the
+ * first provider with a matching model, which would be a built-in one.
  */
 function resolvePinnedProviders(input: {
   pinnedProvider: AgentProvider;
@@ -136,9 +168,6 @@ function resolvePinnedProviders(input: {
   entriesByProvider: ReadonlyMap<AgentProvider, ProviderSnapshotEntry>;
 }): StructuredGenerationProvider[] {
   const { pinnedProvider, modelEntries, entriesByProvider } = input;
-  if (!entriesByProvider.has(pinnedProvider)) {
-    return [];
-  }
   const pinnedEntries = modelEntries.filter((entry) => entry.provider === pinnedProvider);
   const providers: StructuredGenerationProvider[] = [];
 

@@ -129,7 +129,10 @@ import { assertPluginTimelineDataSize } from "./agent/agent-timeline-content.js"
 import { parsePluginClientId } from "./plugins/plugin-session-identity.js";
 import { buildAgentForkContextAttachment } from "./agent/activity-curator.js";
 import { buildAgentPrompt } from "./agent/prompt-attachments.js";
-import type { StructuredGenerationDaemonConfig } from "./agent/structured-generation-providers.js";
+import {
+  readAgentGenerationSelection,
+  type StructuredGenerationDaemonConfig,
+} from "./agent/structured-generation-providers.js";
 import {
   getAgentStreamEventTurnId,
   type AgentPersistenceHandle,
@@ -151,7 +154,6 @@ import {
   deriveWorkspaceDisplayName,
 } from "./workspace-registry-model.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
-import { isSameOrDescendantPath } from "./path-utils.js";
 import {
   resolveProjectDisplayName,
   resolveWorkspaceDisplayName,
@@ -948,12 +950,10 @@ export class Session {
           agentManager: this.agentManager,
           providerSnapshotManager,
           readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
-          getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
-          getCheckoutAgentProviders: (cwd) =>
-            this.agentManager
-              .listAgents()
-              .filter((agent) => isSameOrDescendantPath(cwd, agent.cwd))
-              .map((agent) => agent.provider),
+          resolveCheckoutRoot: async (cwd) =>
+            (await this.workspaceGitService.getSnapshot(cwd)).git.repoRoot ?? cwd,
+          getFocusedAgentId: () => this.getClientActivity()?.focusedAgentId,
+          logger: this.sessionLogger,
         }),
       }),
       paseoHome: this.paseoHome,
@@ -1543,12 +1543,7 @@ export class Session {
       return undefined;
     }
 
-    return {
-      provider: agent.provider,
-      model: agent.runtimeInfo?.model ?? agent.config.model ?? null,
-      thinkingOptionId:
-        agent.runtimeInfo?.thinkingOptionId ?? agent.config.thinkingOptionId ?? null,
-    };
+    return readAgentGenerationSelection(agent);
   }
 
   private readStructuredGenerationDaemonConfig(): StructuredGenerationDaemonConfig {
