@@ -27,7 +27,7 @@ export const FORK_REPO = "x9x9x9x9x9x91/paseo";
 export const UPSTREAM_REPO = "getpaseo/paseo";
 export const RELEASE_BRANCH = "fork/release";
 // Upstream pull requests that carry this branch's feature commits. Once all of them are in an
-// upstream stable release, the fork has nothing left to add and retires. One upstream closes
+// upstream stable release, the fork has nothing left to add and retires. A pull upstream closes
 // without merging gets a notice (noticeClosedPulls).
 export const UPSTREAM_PULLS = [7176, 7313];
 // The fork's own commits (the update feed, this job) say so in their subject; every other
@@ -1032,10 +1032,12 @@ function noticeClosedPulls({ state, options, runDir }) {
       // The door drops a bare number from a key; glued to a word, it keeps two pulls apart.
       key: `closed pr${pull}`,
       title: `Paseo fork: upstream closed #${pull} without merging it`,
-      body: `Upstream closed https://github.com/${UPSTREAM_REPO}/pull/${pull} without merging it, so the fork's feature it carries does not reach upstream through it. The release job goes on rebasing and publishing the fork with that feature, and while #${pull} stays in UPSTREAM_PULLS, upstream merging the fork's other pulls does not retire the fork.\n\nThe hand step: on ${RELEASE_BRANCH}, put the trailer of the commit that reads "${UPSTREAM_TRAILER}: ${UPSTREAM_REPO}#${pull}" back to "${UPSTREAM_TRAILER}: none", and take ${pull} out of UPSTREAM_PULLS in fork/release.mjs. When upstream carries the change in a pull of its own, put that pull's number in both places instead.\n\nfork/README.md, Retirement, has the rest.\n`,
+      body: `Upstream closed https://github.com/${UPSTREAM_REPO}/pull/${pull} without merging it, so the fork's feature it carries does not reach upstream through it. The release job goes on rebasing and publishing the fork with that feature, and while #${pull} stays in UPSTREAM_PULLS, upstream merging the fork's other pulls does not retire the fork.\n\nThe hand step: on ${RELEASE_BRANCH}, give the feature's commit the trailer "${UPSTREAM_TRAILER}: none" (in place of "${UPSTREAM_TRAILER}: ${UPSTREAM_REPO}#${pull}" when it has that, added when it has no trailer), and take ${pull} out of UPSTREAM_PULLS in fork/release.mjs. Without the trailer, the handover would drop the feature once upstream merges the other pulls. When upstream carries the change in a pull of its own, put that pull in UPSTREAM_PULLS in place of ${pull} instead.\n\nfork/README.md, Retirement, has the rest.\n`,
     });
     if (delivered) told.push(pull);
   }
+  // Kept in order, so the same pulls read in another order are not a change.
+  told.sort((left, right) => left - right);
   const before = JSON.stringify(state.closedPulls ?? []);
   if (told.length > 0) state.closedPulls = told;
   else delete state.closedPulls;
