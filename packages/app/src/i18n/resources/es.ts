@@ -2154,6 +2154,19 @@ export const es: TranslationResources = {
       sentTitle: "Notificación de prueba enviada",
       sentDescription: "Paseo entregó la notificación al sistema operativo.",
       sendFailedTitle: "No se pudo enviar la notificación de prueba",
+      projects: {
+        title: "Insignia y notificaciones",
+        info: "Solo los espacios de trabajo de estos proyectos cuentan para la insignia del Dock y muestran notificaciones. Todos los espacios de trabajo siguen mostrando su estado en la barra lateral.",
+        scope: {
+          label: "Proyectos",
+          hint: "Con proyectos elegidos, un proyecto nuevo queda desactivado hasta que lo actives",
+          options: {
+            all: "Todos los proyectos",
+            chosen: "Proyectos elegidos",
+          },
+        },
+        empty: "Aún no hay proyectos",
+      },
     },
     hostSections: {
       projects: "Proyectos",

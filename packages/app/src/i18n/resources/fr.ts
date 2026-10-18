@@ -2153,6 +2153,19 @@ export const fr: TranslationResources = {
       sentTitle: "Notification de test envoyée",
       sentDescription: "Paseo a transmis la notification au système d’exploitation.",
       sendFailedTitle: "Impossible d’envoyer la notification de test",
+      projects: {
+        title: "Pastille et notifications",
+        info: "Seuls les espaces de travail de ces projets comptent dans la pastille du Dock et déclenchent des notifications. Chaque espace de travail continue d’afficher son état dans la barre latérale.",
+        scope: {
+          label: "Projets",
+          hint: "Avec des projets choisis, un nouveau projet reste désactivé jusqu’à ce que vous l’activiez",
+          options: {
+            all: "Tous les projets",
+            chosen: "Projets choisis",
+          },
+        },
+        empty: "Aucun projet pour l’instant",
+      },
     },
     hostSections: {
       projects: "Projets",
