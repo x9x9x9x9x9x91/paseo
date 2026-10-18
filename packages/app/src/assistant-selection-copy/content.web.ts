@@ -168,7 +168,18 @@ export function createElementClipboardContent(element: Element): MarkdownClipboa
   return clipboardContentFromMarkup(container);
 }
 
+type AssistantSelectionSource =
+  | { kind: "markdown"; markdown: string; plainText: string }
+  | { kind: "code"; code: string; language: string | null; block: boolean };
+
+type MarkdownSelectionSource = Extract<AssistantSelectionSource, { kind: "markdown" }>;
+
 function clipboardContentFromMarkup(container: HTMLElement): MarkdownClipboardContent | null {
+  const source = readMarkup(container);
+  return source ? clipboardContentFromMarkdown(source) : null;
+}
+
+function readMarkup(container: HTMLElement): MarkdownSelectionSource | null {
   const markdown = markdownTurndown.turndown(container).trim();
   if (!markdown) {
     return null;
@@ -177,13 +188,49 @@ function clipboardContentFromMarkup(container: HTMLElement): MarkdownClipboardCo
   // text/html is rendered from escaped Markdown, so literal Markdown characters stay
   // literal in a rich target.
   const plainText = plainTurndown.turndown(container).trim();
-  const content = createSelectionClipboardContent(markdown, plainText);
+  return { kind: "markdown", markdown, plainText };
+}
+
+function clipboardContentFromMarkdown(source: MarkdownSelectionSource): MarkdownClipboardContent {
+  const content = createSelectionClipboardContent(source.markdown, source.plainText);
   return { ...content, html: flattenClipboardListMarkup(content.html) };
 }
 
 export function createAssistantSelectionClipboardContent(
   selection: Selection | null,
 ): MarkdownClipboardContent | null {
+  const source = readAssistantSelection(selection);
+  if (!source) {
+    return null;
+  }
+  if (source.kind === "code") {
+    return createCodeClipboardContent(source.code, {
+      language: source.language,
+      block: source.block,
+    });
+  }
+  return clipboardContentFromMarkdown(source);
+}
+
+/**
+ * The selection as Markdown, read the same way Copy reads it, for quoting into the composer.
+ *
+ * Copy hands partly-selected code over bare so it pastes straight into a shell. A quote is
+ * Markdown, so the code stays code: a fence when the selection spans lines of a block, a code
+ * span otherwise.
+ */
+export function createAssistantSelectionMarkdown(selection: Selection | null): string | null {
+  const source = readAssistantSelection(selection);
+  if (!source) {
+    return null;
+  }
+  if (source.kind === "markdown") {
+    return source.markdown;
+  }
+  return source.block ? fencedCode(source.code, source.language) : inlineCode(source.code);
+}
+
+function readAssistantSelection(selection: Selection | null): AssistantSelectionSource | null {
   if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) {
     return null;
   }
@@ -195,7 +242,7 @@ export function createAssistantSelectionClipboardContent(
   }
 
   if (parts.length === 1) {
-    const partialCode = createPartialCodeContent(range, parts[0]!.message);
+    const partialCode = readPartialCode(range, parts[0]!.message);
     if (partialCode) {
       return partialCode;
     }
@@ -206,7 +253,25 @@ export function createAssistantSelectionClipboardContent(
     container.append(cloneMarkdownSelection(part.range, part.message));
   }
   restoreMarkdownElements(container);
-  return clipboardContentFromMarkup(container);
+  return readMarkup(container);
+}
+
+// Both delimiters outrun every backtick run inside the code, so none of it closes them early.
+function fencedCode(code: string, language: string | null): string {
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(code) + 1));
+  return `${fence}${language ?? ""}\n${code}\n${fence}`;
+}
+
+// A span whose code starts or ends with a space loses one from each end when rendered,
+// so it gets a padding space of its own to lose. A span of only spaces is kept as is.
+function inlineCode(code: string): string {
+  const marker = "`".repeat(longestBacktickRun(code) + 1);
+  const padding = /^[` ]|[` ]$/.test(code) && /[^ ]/.test(code) ? " " : "";
+  return `${marker}${padding}${code}${padding}${marker}`;
+}
+
+function longestBacktickRun(code: string): number {
+  return Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length));
 }
 
 /**
@@ -250,7 +315,7 @@ function startAfterImageFrame(range: Range): Range {
  * a drag that starts or ends in the gap beside a block anchors at the edge of the
  * neighbouring block, which selects nothing there.
  */
-function createPartialCodeContent(range: Range, message: Element): MarkdownClipboardContent | null {
+function readPartialCode(range: Range, message: Element): AssistantSelectionSource | null {
   const region = selectedCodeRegion(range, message);
   if (!region) {
     return null;
@@ -269,10 +334,12 @@ function createPartialCodeContent(range: Range, message: Element): MarkdownClipb
   // otherwise collapse the newlines. A single line stays undecorated, like every
   // other partial selection.
   const block = Boolean(fence) && code.includes("\n");
-  return createCodeClipboardContent(code, {
-    language: fence?.getAttribute(MARKDOWN_COPY_LANGUAGE_ATTRIBUTE),
+  return {
+    kind: "code",
+    code,
+    language: fence?.getAttribute(MARKDOWN_COPY_LANGUAGE_ATTRIBUTE) ?? null,
     block,
-  });
+  };
 }
 
 function selectedCodeRegion(range: Range, message: Element): Element | null {
