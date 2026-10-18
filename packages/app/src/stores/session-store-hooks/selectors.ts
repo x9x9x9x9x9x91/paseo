@@ -5,6 +5,7 @@ import {
   type WorkspaceStructure,
   type WorkspaceStructureProject,
 } from "@/projects/workspace-structure";
+import { isProjectCountedForAttention, type AttentionProjects } from "@/utils/attention-projects";
 import type { DesktopBadgeWorkspaceStatus } from "@/utils/desktop-badge-state";
 import { resolveWorkspaceMapKeyByIdentity } from "@/utils/workspace-identity";
 import type { ProjectDescriptor, WorkspaceDescriptor } from "../session-store";
@@ -316,11 +317,14 @@ export function selectHasWorkspaces(state: SessionsSnapshot, serverId: string | 
 
 export function selectWorkspaceStatusesForBadges(
   state: SessionsSnapshot,
+  attentionProjects: AttentionProjects,
 ): DesktopBadgeWorkspaceStatus[] {
   const statuses: DesktopBadgeWorkspaceStatus[] = [];
   for (const session of Object.values(state.sessions)) {
     for (const workspace of session.workspaces.values()) {
-      statuses.push(workspace.status);
+      if (isProjectCountedForAttention(attentionProjects, workspace.projectId)) {
+        statuses.push(workspace.status);
+      }
     }
   }
   return statuses;
