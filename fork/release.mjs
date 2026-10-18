@@ -86,6 +86,7 @@ const MAX_ATTEMPTS = 3;
 const FEATURE_SPECS = [
   "e2e/browser/assistant-selection-quote.spec.ts",
   "e2e/browser/assistant-selection-copy.spec.ts",
+  "e2e/browser/attention-projects.spec.ts",
 ];
 
 const ROOT = process.env.PASEO_FORK_ROOT ?? path.join(os.homedir(), "Coding/_forks/paseo-release");
