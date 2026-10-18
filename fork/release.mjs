@@ -777,9 +777,17 @@ function release({ ctx, options, env, runDir, features, handover = false }) {
  */
 function retire({ ctx, options, runDir, reason }) {
   // A feature release always targets a commit on top of upstream's, so a latest release on
-  // upstream's own commit is a handover an earlier run published without recording it.
+  // upstream's own commit is a handover an earlier run published without recording it. Read
+  // from its tag (poll fetched the fork's tags): the handover pushes its tag before creating the
+  // release, and GitHub does not promise target_commitish for a release on an existing tag.
   const upstreamCommit = git(["rev-parse", `${ctx.latestTag}^{commit}`], { runDir });
-  if (!options.retire && ctx.publishedCommit === upstreamCommit) {
+  const latestTagged = ctx.publishedVersion
+    ? run("git", ["rev-parse", "-q", "--verify", `refs/tags/${ctx.publishedVersion}^{commit}`], {
+        runDir,
+        quiet: true,
+      }).stdout
+    : "";
+  if (!options.retire && latestTagged === upstreamCommit) {
     ctx.version = ctx.publishedVersion;
     log(`  ${reason}: the handover ${ctx.version} is already out`);
     return "retired";
