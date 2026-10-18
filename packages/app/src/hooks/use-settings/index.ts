@@ -252,6 +252,11 @@ export function useSettings<TSelected>(
   };
 }
 
+/** The app settings as last loaded, for code that reads one at an event instead of rendering it. */
+export function getCachedAppSettings(queryClient: QueryClient = appQueryClient): AppSettings {
+  return normalizeAppSettings(queryClient.getQueryData(APP_SETTINGS_QUERY_KEY));
+}
+
 export async function persistAppSettings(updates: Partial<AppSettings>): Promise<void> {
   await saveAppSettings({ queryClient: appQueryClient, updates });
 }
