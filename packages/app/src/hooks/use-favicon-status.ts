@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getIsElectronRuntimeMac } from "@/constants/layout";
 import { useAllDirectoryDemand } from "./use-directory-demand";
 import { getDesktopHost } from "@/desktop/host";
+import { useAppSettings } from "@/hooks/use-settings";
 import { createMacDockBadgeCountSelector } from "@/utils/desktop-badge-state";
 import { createFaviconStatusSelector, type FaviconStatus } from "@/utils/favicon-status";
 import { isNative } from "@/constants/platform";
@@ -85,8 +86,14 @@ export function useFaviconStatus() {
   // The favicon reads the whole fleet, so it has to keep every host's directory loading even
   // though it no longer subscribes to the agent maps.
   useAllDirectoryDemand({ serverIds, enabled: !isNative });
+  const { settings } = useAppSettings();
+  const attentionProjects = settings.attentionProjects;
   const selectFaviconStatus = useMemo(createFaviconStatusSelector, []);
-  const selectMacDockBadgeCount = useMemo(createMacDockBadgeCountSelector, []);
+  // The favicon follows every agent; only the dock badge and OS banners follow this choice.
+  const selectMacDockBadgeCount = useMemo(
+    () => createMacDockBadgeCountSelector(attentionProjects),
+    [attentionProjects],
+  );
   const status = useSessionStore(selectFaviconStatus);
   const dockBadgeCount = useSessionStore(selectMacDockBadgeCount);
   const [colorScheme, setColorScheme] = useState<ColorScheme>(getSystemColorScheme);
