@@ -86,42 +86,67 @@ test("a fork release changes the app, the build config and the daemon patch only
   );
 });
 
-test("the gate runs every browser spec the branch adds or changes on upstream's tag", (t) => {
+const BROWSER = "packages/app/e2e/browser";
+
+/** A throwaway repo with upstream's tag v0.11.4 on three browser specs. */
+function upstreamRepo(t) {
   const repo = mkdtempSync(path.join(os.tmpdir(), "fork-specs-"));
   t.after(() => rmSync(repo, { recursive: true, force: true }));
   const git = (...args) => {
-    const identity = ["-c", "user.name=fork", "-c", "user.email=fork@example.invalid"];
-    const unsigned = ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
-    const result = spawnSync("git", [...identity, ...unsigned, ...args], {
-      cwd: repo,
-      encoding: "utf8",
-    });
+    const config = {
+      "user.name": "fork",
+      "user.email": "fork@example.invalid",
+      "commit.gpgsign": "false",
+      "tag.gpgsign": "false",
+      "core.hooksPath": "/dev/null",
+    };
+    const flags = Object.entries(config).flatMap(([key, value]) => ["-c", `${key}=${value}`]);
+    const result = spawnSync("git", [...flags, ...args], { cwd: repo, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
   };
   const write = (file, text) => {
     mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
     writeFileSync(path.join(repo, file), text);
   };
-  const browser = "packages/app/e2e/browser";
+  const commit = (message) => {
+    git("add", "-A");
+    git("commit", "-q", "-m", message);
+  };
   git("init", "-q");
-  write(`${browser}/untouched.spec.ts`, "upstream's spec\n");
-  write(`${browser}/changed.spec.ts`, "upstream's spec, which a feature changes\n");
-  write(`${browser}/removed.spec.ts`, "upstream's spec, which a feature removes\n");
-  git("add", "-A");
-  git("commit", "-q", "-m", "upstream");
+  write(`${BROWSER}/untouched.spec.ts`, "upstream's spec\n");
+  write(`${BROWSER}/changed.spec.ts`, "upstream's spec, which a feature changes\n");
+  write(`${BROWSER}/removed.spec.ts`, "upstream's spec, which a feature removes\n");
+  commit("upstream");
   git("tag", "v0.11.4");
-  write(`${browser}/changed.spec.ts`, "the feature's change\n");
-  write(`${browser}/added.spec.ts`, "the feature's spec\n");
-  write(`${browser}/added.real.spec.ts`, "a spec that needs a real provider\n");
+  return { repo, git, write, commit };
+}
+
+test("the gate runs every browser spec the branch adds or changes on upstream's tag", (t) => {
+  const { repo, write, commit } = upstreamRepo(t);
+  write(`${BROWSER}/changed.spec.ts`, "the feature's change\n");
+  write(`${BROWSER}/added.spec.ts`, "the feature's spec\n");
+  write(`${BROWSER}/added.real.spec.ts`, "a spec that needs a real provider\n");
   write("packages/app/e2e/support/helpers/added.ts", "a helper\n");
   write("packages/app/src/added.spec.ts", "a spec outside the browser folder\n");
-  rmSync(path.join(repo, browser, "removed.spec.ts"));
-  git("add", "-A");
-  git("commit", "-q", "-m", "feat(app): a feature");
+  rmSync(path.join(repo, BROWSER, "removed.spec.ts"));
+  commit("feat(app): a feature");
   assert.deepEqual(branchSpecs("v0.11.4", { cwd: repo }), [
     "e2e/browser/added.spec.ts",
     "e2e/browser/changed.spec.ts",
   ]);
+});
+
+test("a branch that changes the app with no browser spec fails, one that leaves it alone runs none", (t) => {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  git("checkout", "-q", "-b", "app", "v0.11.4");
+  write("packages/app/src/feature.tsx", "a feature with no browser spec\n");
+  write(`${BROWSER}/added.real.spec.ts`, "a spec that needs a real provider\n");
+  commit("feat(app): a feature");
+  assert.throws(() => branchSpecs("v0.11.4", { cwd: repo }), /adds or changes no browser spec/);
+  git("checkout", "-q", "-b", "daemon", "v0.11.4");
+  write("packages/server/src/server/session.ts", "the daemon patch\n");
+  commit("fix(server): the daemon patch");
+  assert.deepEqual(branchSpecs("v0.11.4", { cwd: repo }), []);
 });
 
 test("a feature whose Upstream trailer is none is fork-only", () => {
