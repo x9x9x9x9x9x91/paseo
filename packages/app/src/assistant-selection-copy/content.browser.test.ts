@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createAssistantSelectionClipboardContent } from "./content.web";
+import { createMarkdownParser } from "@/utils/markdown-parser";
+import {
+  createAssistantSelectionClipboardContent,
+  createAssistantSelectionMarkdown,
+} from "./content.web";
 
 const fixture = `
   <div data-testid="assistant-message">
@@ -758,5 +762,76 @@ describe("assistant selection copy inside highlighted code", () => {
     expect(content?.plainText).toBe(
       "```typescript\nconst answer = 1;\n  if (answer) {\n    doThing();\n```\n\nAfter the block.",
     );
+  });
+});
+
+describe("assistant selection quote", () => {
+  it("quotes prose and lists with the Markdown Copy writes", () => {
+    const message = mountFixture();
+    const selection = selectNodeContents(message);
+
+    const quote = createAssistantSelectionMarkdown(selection);
+
+    expect(quote).toBe(copiedMarkdown(selection));
+    expect(quote).toContain("**bold text**");
+    expect(quote).toContain("- First bullet text");
+  });
+
+  it("does not quote a collapsed or non-assistant selection", () => {
+    const message = mountFixture();
+    expect(
+      createAssistantSelectionMarkdown(selectText(fixtureElement(message, "span"), 2, 2)),
+    ).toBe(null);
+    const outside = document.createElement("p");
+    outside.textContent = "Outside the transcript";
+    document.body.append(outside);
+    expect(createAssistantSelectionMarkdown(selectText(outside, 0, 7))).toBe(null);
+  });
+
+  it("keeps lines of a code block as a fence with its language", () => {
+    const message = mountHighlighted();
+    const range = document.createRange();
+    range.setStart(tokenText(message, "const"), 0);
+    range.setEnd(tokenText(message, " {"), 2);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    expect(createAssistantSelectionMarkdown(selection)).toBe(
+      "```typescript\nconst answer = 1;\n  if (answer) {\n```",
+    );
+  });
+
+  it("keeps part of inline code as a code span that outlasts its backticks", () => {
+    const message = mountFixture();
+    message.innerHTML =
+      '<div data-paseo-markdown-tag="p">Run <span data-paseo-markdown-tag="code">a`b apply</span> now.</div>';
+    const code = fixtureElement(message, '[data-paseo-markdown-tag="code"]');
+
+    expect(createAssistantSelectionMarkdown(selectText(code, 0, 3))).toBe("``a`b``");
+  });
+
+  it("keeps the spaces at the edges of part of inline code when the quote renders", () => {
+    const message = mountFixture();
+    message.innerHTML =
+      '<div data-paseo-markdown-tag="p">Run <span data-paseo-markdown-tag="code">if (ready)    return  done</span> now.</div>';
+    const code = fixtureElement(message, '[data-paseo-markdown-tag="code"]');
+    const parser = createMarkdownParser({ linkify: false });
+    const rendered = (markdown: string | null) =>
+      parser
+        .parseInline(markdown ?? "", {})[0]
+        ?.children?.find((token) => token.type === "code_inline")?.content;
+
+    for (const [start, end] of [
+      [10, 21],
+      [10, 20],
+      [14, 22],
+    ]) {
+      const selected = code.textContent?.slice(start, end);
+      expect(rendered(createAssistantSelectionMarkdown(selectText(code, start, end)))).toBe(
+        selected,
+      );
+    }
+    expect(createAssistantSelectionMarkdown(selectText(code, 20, 22))).toBe("`  `");
   });
 });

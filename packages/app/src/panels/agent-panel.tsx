@@ -34,6 +34,10 @@ import {
 } from "@/composer/pill-styles";
 import { getActiveMessageSubmissions } from "@/composer/submission/model";
 import { RewindComposerRestoreProvider } from "@/components/rewind/composer-restore";
+import {
+  ComposerQuoteProvider,
+  type ComposerQuoteTarget,
+} from "@/assistant-selection-copy/composer-quote";
 import { useProviderIcon } from "@/components/provider-icons";
 import { useToastHost, type ToastApi, type ToastState } from "@/components/toast-host";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
@@ -1234,6 +1238,13 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       />
     </RenderProfile>
   );
+  const quoteTarget = useMemo<ComposerQuoteTarget | null>(
+    () =>
+      isPaneFocused && hasActiveComposer
+        ? { textSource: agentInputDraft.textSource, setText: agentInputDraft.replaceText }
+        : null,
+    [agentInputDraft.replaceText, agentInputDraft.textSource, hasActiveComposer, isPaneFocused],
+  );
   const streamContent = (
     <View style={animatedStaticStyles.content}>
       <RenderProfile id={`AgentStreamSection:${agentId}`}>
@@ -1248,6 +1259,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           hasActiveComposer={hasActiveComposer}
           hasVisibleAgentTracks={hasVisibleAgentTracks}
           toast={toastApi}
+          quoteTarget={quoteTarget}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       </RenderProfile>
@@ -1373,6 +1385,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasActiveComposer,
   hasVisibleAgentTracks,
   toast,
+  quoteTarget,
   onOpenWorkspaceFile,
 }: {
   streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
@@ -1385,6 +1398,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   hasActiveComposer: boolean;
   hasVisibleAgentTracks: boolean;
   toast: ReturnType<typeof useToastHost>["api"];
+  quoteTarget: ComposerQuoteTarget | null;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
@@ -1443,22 +1457,24 @@ const AgentStreamSection = memo(function AgentStreamSection({
   }, [pendingPermissionList]);
 
   return (
-    <AgentStreamView
-      ref={streamViewRef}
-      agentId={agent.id}
-      serverId={serverId}
-      context={agent}
-      streamItems={streamItems}
-      pendingPermissions={pendingPermissions}
-      routeBottomAnchorRequest={routeBottomAnchorRequest}
-      isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
-      bottomOverlayTailClearance={bottomOverlayTailClearance}
-      bottomOverlayControlClearance={bottomOverlayControlClearance}
-      toast={toast}
-      pendingMessageSubmissions={pendingMessageSubmissions}
-      turnPresentation={turnPresentation}
-      onOpenWorkspaceFile={onOpenWorkspaceFile}
-    />
+    <ComposerQuoteProvider target={quoteTarget}>
+      <AgentStreamView
+        ref={streamViewRef}
+        agentId={agent.id}
+        serverId={serverId}
+        context={agent}
+        streamItems={streamItems}
+        pendingPermissions={pendingPermissions}
+        routeBottomAnchorRequest={routeBottomAnchorRequest}
+        isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
+        bottomOverlayTailClearance={bottomOverlayTailClearance}
+        bottomOverlayControlClearance={bottomOverlayControlClearance}
+        toast={toast}
+        pendingMessageSubmissions={pendingMessageSubmissions}
+        turnPresentation={turnPresentation}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />
+    </ComposerQuoteProvider>
   );
 });
 
