@@ -1,12 +1,15 @@
 # The fork's release line
 
-This fork ships Paseo's desktop app with features upstream has not merged yet. `fork/release` is upstream's latest stable tag plus the fork's own commits, and every upstream stable release gets a fork release the same day. Today that is the Quote button: select text in an agent message and quote it into the composer, upstream pull [#7176](https://github.com/getpaseo/paseo/pull/7176).
+This fork ships Paseo's desktop app with features upstream has not merged yet. `fork/release` is upstream's latest stable tag plus the fork's own commits, and every upstream stable release gets a fork release the same day. Today that is:
+
+- the Quote button: select text in an agent message and quote it into the composer, upstream pull [#7176](https://github.com/getpaseo/paseo/pull/7176);
+- a daemon patch with no upstream pull: a chat on a custom provider (the zero-retention Claude) has its workspace named, and its checkout's commit and pull request text written, on that provider only. Upstream names on the first provider with a Haiku, whatever provider the chat runs on, so a private chat's first message reached the subscription.
 
 ## What a fork release changes
 
-Only the app (`packages/app`) and the build config: the update feed in `packages/desktop/electron-builder.yml` and this folder. The daemon, the CLI, the desktop shell and the lockfile are upstream's source of the same tag; the job refuses to build a branch that changes anything else. Swapping the app leaves a running daemon alone: the desktop app stops only a daemon it started itself.
+The app (`packages/app`), the build config (the update feed in `packages/desktop/electron-builder.yml` and this folder), and the daemon patch's files, listed with their tests in `DAEMON_PATCH_FILES` and `DAEMON_PATCH_TESTS` in `release.mjs`. The rest of the daemon, the CLI, the desktop shell and the lockfile are upstream's source of the same tag; the job refuses to build a branch that changes anything else. Swapping the app leaves a running daemon alone: the desktop app stops only a daemon it started itself, so the daemon patch takes effect at the daemon's next restart.
 
-Commits that belong to the fork itself (the feed, this job) start with `fork: `. Every other commit is a feature, and its upstream pull goes in `UPSTREAM_PULLS` in `release.mjs`.
+Commits that belong to the fork itself (the feed, this job) start with `fork: `. Every other commit is a feature, and its upstream pull goes in `UPSTREAM_PULLS` in `release.mjs`. A feature with no upstream pull carries the trailer `Upstream: none` in its message.
 
 ## Versions
 
@@ -25,7 +28,7 @@ Electron's updater on macOS installs a build only when it satisfies the running 
 A run asks GitHub for upstream's latest release (published, not a prerelease), then:
 
 1. A newer upstream release: rebase the branch onto its tag. On a conflict, a headless agent tries once; it reaches sin0's model proxy through an ssh tunnel, since sincoder has no login of its own. If it cannot resolve the conflict, Tim gets a notice with the conflict and the app stays on the last release.
-2. Check: typecheck, lint, format, this folder's tests, the app's unit tests and the Quote and Copy Playwright specs, on the Node major upstream's release workflow uses.
+2. Check: typecheck, lint, format, this folder's tests, the app's unit tests, the daemon patch's tests and the Quote and Copy Playwright specs, on the Node major upstream's release workflow uses.
 3. Build the arm64 app, signed with `Developer ID Application: Tim Roth (HKM8HFGKC6)` and notarized, then verify the signature, the notarization, the version and the feed inside the app.
 4. Push the rebased branch and publish the release, with `latest-mac.yml`, the zip and dmg and their blockmaps, marked latest.
 
@@ -35,4 +38,4 @@ Run it by hand on sincoder through `~/bin/gui-run.sh` so it gets the session's k
 
 ## Retirement
 
-When upstream merges the feature, the fork hands the app back and stops. A run retires when every pull in `UPSTREAM_PULLS` is merged into the new stable release, or when the rebase drops every feature commit as already upstream. It then builds upstream's tag as it is, with upstream's update feed, signs it as above, numbers it like any fork release (`0.12.0-fork.1` on upstream `v0.12.0`) and publishes it as the fork's last release, its tag on upstream's commit. A fork app takes it because the fork signed it; that build then finds stock `0.12.0` on upstream's releases, newer than `0.12.0-fork.1`, and takes it because its requirement names upstream's team. Two updates, no hand install, and the daemon and its agents keep running. The job renames its launch agent so it does not load again and tells Tim; a failed handover is retried like any release.
+When upstream merges the features, the fork hands the app back and stops. A run retires when every pull in `UPSTREAM_PULLS` is merged into the new stable release, or when the rebase drops every feature commit as already upstream. A feature marked `Upstream: none` holds the retirement: the handover would drop it. With one on the branch, a release that carries every listed pull fails with a notice instead; take the merged features' commits off `fork/release` and their pulls out of `UPSTREAM_PULLS`, and the next run rebases the rest. It then builds upstream's tag as it is, with upstream's update feed, signs it as above, numbers it like any fork release (`0.12.0-fork.1` on upstream `v0.12.0`) and publishes it as the fork's last release, its tag on upstream's commit. A fork app takes it because the fork signed it; that build then finds stock `0.12.0` on upstream's releases, newer than `0.12.0-fork.1`, and takes it because its requirement names upstream's team. Two updates, no hand install, and the daemon and its agents keep running. The job renames its launch agent so it does not load again and tells Tim; a failed handover is retried like any release.

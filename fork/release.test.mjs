@@ -4,6 +4,7 @@ import {
   compareStableTags,
   decide,
   featureSubjects,
+  forkOnlySubjects,
   forkVersion,
   nextForkNumber,
   nodeMajorFromWorkflow,
@@ -56,17 +57,39 @@ test("the fork's own commits are told apart from its features", () => {
   );
 });
 
-test("a fork release changes the app and the build config only", () => {
+test("a fork release changes the app, the build config and the daemon patch only", () => {
   assert.deepEqual(
     pathsOutsideScope([
       "packages/app/src/panels/agent-panel.tsx",
       "packages/desktop/electron-builder.yml",
       "fork/release.mjs",
+      "packages/server/src/server/agent/structured-generation-providers.ts",
+      "packages/server/src/server/session.workspaces.test.ts",
+      "packages/protocol/src/messages.ts",
       "packages/server/src/server/index.ts",
+      "packages/server/src/server/session.test.ts",
       "packages/desktop/src/main.ts",
       "package-lock.json",
     ]),
-    ["packages/server/src/server/index.ts", "packages/desktop/src/main.ts", "package-lock.json"],
+    [
+      "packages/server/src/server/index.ts",
+      "packages/server/src/server/session.test.ts",
+      "packages/desktop/src/main.ts",
+      "package-lock.json",
+    ],
+  );
+});
+
+test("a feature whose Upstream trailer is none is fork-only", () => {
+  assert.deepEqual(
+    forkOnlySubjects([
+      "feat(app): quote a selection of an agent message into the composer\t",
+      "fix(server): naming stays on a custom provider\tnone",
+      "fork: the release job\t",
+      "feat(app): another feature\tgetpaseo/paseo#9000",
+      "fix(server): spelled differently\t None ",
+    ]),
+    ["fix(server): naming stays on a custom provider", "fix(server): spelled differently"],
   );
 });
 
