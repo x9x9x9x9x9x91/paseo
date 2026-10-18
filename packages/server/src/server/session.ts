@@ -151,6 +151,7 @@ import {
   deriveWorkspaceDisplayName,
 } from "./workspace-registry-model.js";
 import { resolveWorkspaceIdForPath } from "./resolve-workspace-id-for-path.js";
+import { isSameOrDescendantPath } from "./path-utils.js";
 import {
   resolveProjectDisplayName,
   resolveWorkspaceDisplayName,
@@ -948,6 +949,11 @@ export class Session {
           providerSnapshotManager,
           readDaemonConfig: () => this.readStructuredGenerationDaemonConfig(),
           getFocusedSelection: (cwd) => this.getFocusedAgentSelectionForCwd(cwd),
+          getCheckoutAgentProviders: (cwd) =>
+            this.agentManager
+              .listAgents()
+              .filter((agent) => isSameOrDescendantPath(cwd, agent.cwd))
+              .map((agent) => agent.provider),
         }),
       }),
       paseoHome: this.paseoHome,
@@ -4102,7 +4108,11 @@ export class Session {
               {
                 ...request,
                 firstAgentContext: agentInput
-                  ? { prompt: agentInput.initialPrompt, attachments: agentInput.attachments }
+                  ? {
+                      prompt: agentInput.initialPrompt,
+                      attachments: agentInput.attachments,
+                      provider: agentInput.config.provider,
+                    }
                   : request.firstAgentContext,
               },
               id,
@@ -4303,6 +4313,7 @@ export class Session {
       const firstAgentContext: FirstAgentContext = {
         ...(trimmedPrompt ? { prompt: trimmedPrompt } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        provider: config.provider,
       };
       const workspacePromptTitle = resolveFirstAgentPromptTitle(firstAgentContext);
       const createdWorktree = await this.createAgentLifecycleDispatch.createWorktreeForRequest({
