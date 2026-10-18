@@ -27,7 +27,8 @@ export const FORK_REPO = "x9x9x9x9x9x91/paseo";
 export const UPSTREAM_REPO = "getpaseo/paseo";
 export const RELEASE_BRANCH = "fork/release";
 // Upstream pull requests that carry this branch's feature commits. Once all of them are in an
-// upstream stable release, the fork has nothing left to add and retires.
+// upstream stable release, the fork has nothing left to add and retires. One upstream closes
+// without merging gets a notice (noticeClosedPulls).
 export const UPSTREAM_PULLS = [7176, 7313];
 // The fork's own commits (the update feed, this job) say so in their subject; every other
 // commit on the branch is a feature upstream does not have yet.
@@ -384,22 +385,46 @@ function forkOnlyCommits(range, runDir) {
   return forkOnlySubjects(lines.split("\n").filter(Boolean));
 }
 
+/** An upstream pull as GitHub has it (`state` is open or closed), or null when a quiet read fails. */
+function upstreamPull(pull, runDir, { quiet = false } = {}) {
+  const read = run(
+    "gh",
+    [
+      "api",
+      `repos/${UPSTREAM_REPO}/pulls/${pull}`,
+      "--jq",
+      "[.state, .merged, .merge_commit_sha] | @tsv",
+    ],
+    { step: "github", runDir, quiet },
+  );
+  if (read.status !== 0) return null;
+  const [state, merged, sha] = read.stdout.split("\t");
+  return { state, merged: merged === "true", sha };
+}
+
 function upstreamPullsLanded(stableTag, runDir) {
   return UPSTREAM_PULLS.every((pull) => {
-    const [merged, sha] = gh(
-      [
-        "api",
-        `repos/${UPSTREAM_REPO}/pulls/${pull}`,
-        "--jq",
-        "[.merged, .merge_commit_sha] | @tsv",
-      ],
-      { runDir },
-    ).split("\t");
-    if (merged !== "true") return false;
+    const { merged, sha } = upstreamPull(pull, runDir);
+    if (!merged) return false;
     return (
       run("git", ["merge-base", "--is-ancestor", sha, stableTag], { quiet: true }).status === 0
     );
   });
+}
+
+/**
+ * The listed pulls upstream closed without merging: `untold` still need their notice, `told`
+ * already had it. `reads` pairs each pull with GitHub's `{ state, merged }`, or null when it
+ * could not be read, which keeps a told pull told. A told pull that reopened drops out, so
+ * closing it again is news again.
+ */
+export function closedPulls(reads, told = []) {
+  const result = { untold: [], told: [] };
+  for (const [pull, read] of reads) {
+    const closed = read ? read.state === "closed" && !read.merged : told.includes(pull);
+    if (closed) result[told.includes(pull) ? "told" : "untold"].push(pull);
+  }
+  return result;
 }
 
 /** The checks and the build run on the Node major upstream's own release workflow uses. */
@@ -987,6 +1012,37 @@ function flushPendingNotice(state) {
   }
 }
 
+/**
+ * A listed pull upstream closed without merging never lands, so the feature it carries has
+ * lost its way upstream while the job goes on releasing it. Tim gets one notice per pull with
+ * the hand step; `state.closedPulls` holds the pulls he was told about. The run goes on as before.
+ */
+function noticeClosedPulls({ state, options, runDir }) {
+  if (options.dryRun) return;
+  const reads = UPSTREAM_PULLS.map((pull) => {
+    const read = upstreamPull(pull, runDir, { quiet: true });
+    if (!read) log(`could not read upstream pull #${pull}`);
+    return [pull, read];
+  });
+  const { untold, told } = closedPulls(reads, state.closedPulls ?? []);
+  for (const pull of untold) {
+    log(`upstream closed #${pull} without merging it`);
+    const delivered = notify({
+      level: "warn",
+      // The door drops a bare number from a key; glued to a word, it keeps two pulls apart.
+      key: `closed pr${pull}`,
+      title: `Paseo fork: upstream closed #${pull} without merging it`,
+      body: `Upstream closed https://github.com/${UPSTREAM_REPO}/pull/${pull} without merging it, so the fork's feature it carries does not reach upstream through it. The release job goes on rebasing and publishing the fork with that feature, and while #${pull} stays in UPSTREAM_PULLS, upstream merging the fork's other pulls does not retire the fork.\n\nThe hand step: on ${RELEASE_BRANCH}, put the trailer of the commit that reads "${UPSTREAM_TRAILER}: ${UPSTREAM_REPO}#${pull}" back to "${UPSTREAM_TRAILER}: none", and take ${pull} out of UPSTREAM_PULLS in fork/release.mjs. When upstream carries the change in a pull of its own, put that pull's number in both places instead.\n\nfork/README.md, Retirement, has the rest.\n`,
+    });
+    if (delivered) told.push(pull);
+  }
+  const before = JSON.stringify(state.closedPulls ?? []);
+  if (told.length > 0) state.closedPulls = told;
+  else delete state.closedPulls;
+  // Written now, so a run that dies in its build does not tell Tim again.
+  if (JSON.stringify(told) !== before) writeState(state);
+}
+
 /** One run past the lock: poll, decide, and do the work if there is any. */
 function runOnce(options, state) {
   if (!existsSync(path.join(BUILD, ".git"))) {
@@ -1003,6 +1059,7 @@ function runOnce(options, state) {
     log(`could not poll: ${error.message}`);
     return 1;
   }
+  noticeClosedPulls({ state, options, runDir });
   ctx.candidate = `${ctx.latestTag}@${ctx.head}`;
   const decided = decide(ctx);
   const plan = (options.force || options.retire) && decided === "current" ? "release" : decided;
