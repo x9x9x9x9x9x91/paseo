@@ -58,10 +58,15 @@ const DAEMON_PATCH_TESTS = [
   "src/server/session.workspaces.test.ts",
   "src/server/worktree-branch-name-generator.test.ts",
 ];
-// A fork release changes the app, the build config and the daemon patch's files only. The
-// rest of the daemon, the CLI and every other package stay upstream's source of the same tag,
-// lockfile included.
-const ALLOWED_PATHS = [/^packages\/app\//, /^packages\/desktop\/electron-builder\.yml$/, /^fork\//];
+// A fork release changes the app, the build config, the packaged-app smoke's deadline and the
+// daemon patch's files only. The rest of the daemon, the CLI and every other package stay
+// upstream's source of the same tag, lockfile included.
+const ALLOWED_PATHS = [
+  /^packages\/app\//,
+  /^packages\/desktop\/electron-builder\.yml$/,
+  /^packages\/desktop\/e2e\/packaged-app-smoke\.js$/,
+  /^fork\//,
+];
 const DAEMON_PATCH_PATHS = new Set([
   ...DAEMON_PATCH_FILES,
   ...DAEMON_PATCH_TESTS.map((file) => `packages/server/${file}`),
