@@ -63,11 +63,12 @@ test("the fork's own commits are told apart from its features", () => {
   );
 });
 
-test("a fork release changes the app, the build config and the daemon patch only", () => {
+test("a fork release changes the app, the build config, the smoke deadline and the daemon patch only", () => {
   assert.deepEqual(
     pathsOutsideScope([
       "packages/app/src/panels/agent-panel.tsx",
       "packages/desktop/electron-builder.yml",
+      "packages/desktop/e2e/packaged-app-smoke.js",
       "fork/release.mjs",
       "packages/server/src/server/agent/structured-generation-providers.ts",
       "packages/server/src/server/session.workspaces.test.ts",
@@ -76,12 +77,14 @@ test("a fork release changes the app, the build config and the daemon patch only
       "packages/server/src/server/session.test.ts",
       "packages/server/src/server/agent/agent-manager.test.ts",
       "packages/desktop/src/main.ts",
+      "packages/desktop/e2e/browser-tabs.e2e.mjs",
       "package-lock.json",
     ]),
     [
       "packages/server/src/server/index.ts",
       "packages/server/src/server/agent/agent-manager.test.ts",
       "packages/desktop/src/main.ts",
+      "packages/desktop/e2e/browser-tabs.e2e.mjs",
       "package-lock.json",
     ],
   );
