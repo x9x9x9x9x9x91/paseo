@@ -10,7 +10,9 @@ const { WebSocket } = require("ws");
 const assert = require("node:assert/strict");
 
 const EXECUTABLE_NAME = "Paseo";
-const SMOKE_TIMEOUT_MS = 60_000;
+// Every wait on this deadline polls until the app answers, so a passing run never sits it out.
+// The fork builds on a shared Mac whose load can keep a cold daemon start past a minute.
+const SMOKE_TIMEOUT_MS = 240_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const TERMINAL_CAPTURE_ATTEMPTS = 20;
 const TERMINAL_CAPTURE_INTERVAL_MS = 500;
