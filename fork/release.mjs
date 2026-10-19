@@ -54,6 +54,7 @@ const DAEMON_PATCH_TESTS = [
   "src/server/agent/structured-generation-providers.test.ts",
   "src/server/session/checkout/git-metadata-generator.test.ts",
   "src/server/schedule/service.test.ts",
+  "src/server/session.test.ts",
   "src/server/session.workspaces.test.ts",
   "src/server/worktree-branch-name-generator.test.ts",
 ];
