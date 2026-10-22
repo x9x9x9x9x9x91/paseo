@@ -712,8 +712,11 @@ function buildApp({ version, owner, runDir, env }) {
         "--",
         "--publish",
         "never",
-        "--dir",
+        // A zip target, not --dir: electron-builder writes the app's update feed
+        // (Contents/Resources/app-update.yml) only for a dmg or zip target, and it has to be in
+        // the app before sincoder seals it. The unsigned zip itself is thrown away.
         "--mac",
+        "zip",
         "--arm64",
         ...feedConfig(owner),
         `-c.mac.sign=${SIGN_HOOK}`,
@@ -860,15 +863,36 @@ function ssh(host, line, options = {}) {
   return run("ssh", [...connect, ...alive, host, line], { cwd: ROOT, ...options });
 }
 
+/** Whether `host` answers over ssh with its Max lock in place. */
+function hostAnswers(host, runDir) {
+  const probe = ssh(host, shellLine(["test", "-x", HOST_LOCK]), {
+    step: "build-host",
+    runDir,
+    quiet: true,
+    timeoutMs: 60_000,
+  });
+  return probe;
+}
+
+/**
+ * A transfer to or from the host. When it fails and the host no longer answers, the host went
+ * away, which is not the candidate's failure (HostAway); otherwise the failure stands.
+ */
+function withHost(host, runDir, body) {
+  try {
+    return body();
+  } catch (error) {
+    if (error instanceof StepFailure && hostAnswers(host, runDir).status !== 0) {
+      throw new HostAway(`${host} went away during ${error.step}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
 /** The first build host that answers with its Max lock in place; HostAway when none does. */
 function pickBuildHost(runDir) {
   for (const host of BUILD_HOSTS) {
-    const probe = ssh(host, shellLine(["test", "-x", HOST_LOCK]), {
-      step: "build-host",
-      runDir,
-      quiet: true,
-      timeoutMs: 60_000,
-    });
+    const probe = hostAnswers(host, runDir);
     if (probe.status === 0) return host;
     log(`  build host ${host} does not answer or has no Max lock (exit ${probe.status})`);
   }
@@ -905,25 +929,27 @@ function prepareHost({ host, tag, runDir, job }) {
   if (HOST_AWAY.has(made.status)) throw new HostAway(`${host} went away (exit ${made.status})`);
   if (made.status !== 0)
     throw new StepFailure(step, `could not set up ${host} (exit ${made.status})`);
-  git(
-    [
-      "push",
-      "-q",
-      "--force",
-      "--no-verify",
-      `${host}:${clone}`,
-      `HEAD:${HOST_REF}`,
-      `+refs/tags/${tag}:refs/tags/${tag}`,
-    ],
-    { runDir, timeoutMs: 60 * 60_000 },
-  );
   writeFileSync(path.join(runDir, "host-job.json"), `${JSON.stringify(job, null, 2)}\n`);
-  rsync(`${path.join(TOOLS, "release.mjs")}`, `${host}:${HOST_ROOT}/tools/fork/release.mjs`, {
-    runDir,
-  });
-  rsync(SIGN_HOOK, `${host}:${HOST_ROOT}/tools/fork/sign-mac.cjs`, { runDir });
-  rsync(path.join(runDir, "host-job.json"), `${host}:${hostRun(runName)}/host-job.json`, {
-    runDir,
+  withHost(host, runDir, () => {
+    git(
+      [
+        "push",
+        "-q",
+        "--force",
+        "--no-verify",
+        `${host}:${clone}`,
+        `HEAD:${HOST_REF}`,
+        `+refs/tags/${tag}:refs/tags/${tag}`,
+      ],
+      { runDir, timeoutMs: 60 * 60_000 },
+    );
+    rsync(path.join(TOOLS, "release.mjs"), `${host}:${HOST_ROOT}/tools/fork/release.mjs`, {
+      runDir,
+    });
+    rsync(SIGN_HOOK, `${host}:${HOST_ROOT}/tools/fork/sign-mac.cjs`, { runDir });
+    rsync(path.join(runDir, "host-job.json"), `${host}:${hostRun(runName)}/host-job.json`, {
+      runDir,
+    });
   });
 }
 
@@ -943,7 +969,29 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
   const line = `cd ${shellQuote(HOST_ROOT)} && exec env ${env} "$HOME"/${HOST_LOCK} ${command}`;
   const step = `host-${phase}`;
   const result = ssh(host, line, { step, runDir, quiet: true, stream: true, timeoutMs });
-  rsync(`${host}:${hostRun(runName)}/`, `${runDir}/`, { runDir });
+  if (HOST_AWAY.has(result.status)) {
+    // Its logs come back when the host still answers; nothing else is read from it.
+    run(
+      "rsync",
+      [
+        "-a",
+        "-e",
+        "ssh -o BatchMode=yes -o ConnectTimeout=20",
+        `${host}:${hostRun(runName)}/`,
+        `${runDir}/`,
+      ],
+      {
+        step: "build-host",
+        runDir,
+        quiet: true,
+        timeoutMs: 30 * 60_000,
+      },
+    );
+    throw new HostAway(
+      `${host} went away or stayed busy in the ${phase} half (exit ${result.status})`,
+    );
+  }
+  withHost(host, runDir, () => rsync(`${host}:${hostRun(runName)}/`, `${runDir}/`, { runDir }));
   const resultFile = path.join(runDir, `host-result-${phase}.json`);
   const outcome = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null;
   if (outcome?.ok) {
@@ -953,11 +1001,6 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
   if (outcome) {
     const logFile = outcome.log ? path.join(runDir, outcome.log) : null;
     throw new StepFailure(outcome.step, `${outcome.message} (on ${host})`, logFile);
-  }
-  if (HOST_AWAY.has(result.status)) {
-    throw new HostAway(
-      `${host} went away or stayed busy in the ${phase} half (exit ${result.status})`,
-    );
   }
   throw new StepFailure(
     step,
@@ -1341,7 +1384,9 @@ function release({ ctx, options, runDir, features, checks = null, handover = fal
   runHostPhase({ host: ctx.host, phase: "app", runDir, timeoutMs: 4 * 60 * 60_000 });
   signHere({ version, owner, runDir });
   const signed = path.join(runDir, SIGNED_ARCHIVE);
-  rsync(signed, `${ctx.host}:${hostRun(path.basename(runDir))}/${SIGNED_ARCHIVE}`, { runDir });
+  withHost(ctx.host, runDir, () =>
+    rsync(signed, `${ctx.host}:${hostRun(path.basename(runDir))}/${SIGNED_ARCHIVE}`, { runDir }),
+  );
   runHostPhase({ host: ctx.host, phase: "package", runDir, timeoutMs: 2 * 60 * 60_000 });
   const files = checkRelease({ version, owner, runDir });
   log(`  signed, notarized and verified ${ctx.version}`);
@@ -1407,9 +1452,11 @@ function work({ ctx, options, plan, runDir }) {
   if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
   if (options.retire) return retire({ ctx, options, runDir, reason: "--retire" });
   const range = `${ctx.baseTag}..${ctx.head}`;
-  // The commits the new release replaces leave with the rebase.
-  ctx.superseded = plan === "rebase" ? supersededCommits(range, ctx.latestTag, runDir) : [];
+  // The commits upstream's release replaces leave with the rebase; a branch already on that
+  // release (rebased by hand) is replayed in place without them.
+  ctx.superseded = supersededCommits(range, ctx.latestTag, runDir);
   const leaving = ctx.superseded.map((commit) => commit.sha);
+  const rebasing = plan === "rebase" || leaving.length > 0;
   // With no pull left to wait for, only fork-only features remain and the rebase carries them.
   if (
     plan === "rebase" &&
@@ -1426,7 +1473,7 @@ function work({ ctx, options, plan, runDir }) {
     const reason = `upstream ${ctx.latestTag} carries the fork's pulls`;
     return retire({ ctx, options, runDir, reason });
   }
-  if (plan === "rebase") {
+  if (rebasing) {
     const rebased = rebaseOnto({
       newBase: ctx.latestTag,
       oldBase: ctx.baseTag,
@@ -1443,7 +1490,7 @@ function work({ ctx, options, plan, runDir }) {
     git(["checkout", "-q", "-f", "--detach", ctx.head], { runDir });
   }
   const features = featureSubjects(commitSubjects(`${ctx.latestTag}..HEAD`, runDir));
-  if (features.length === 0 && plan !== "rebase") {
+  if (features.length === 0 && !rebasing) {
     throw new StepFailure("branch", `${options.branch} has no feature commit on ${ctx.latestTag}`);
   }
   if (features.length === 0) {
