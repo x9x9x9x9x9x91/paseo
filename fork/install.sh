@@ -6,7 +6,7 @@
 set -euo pipefail
 
 root=${PASEO_FORK_ROOT:-$HOME/Coding/_forks/paseo-release}
-fork=git@github.com:x9x9x9x9x9x91/paseo.git
+fork=https://github.com/x9x9x9x9x9x91/paseo.git
 upstream=https://github.com/getpaseo/paseo.git
 label=com.alma.paseo-fork-release
 here=${0:A:h}
