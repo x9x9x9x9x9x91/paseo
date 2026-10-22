@@ -747,7 +747,11 @@ function buildApp({ version, owner, runDir, env }) {
  */
 function packageApp({ version, owner, runDir, env }) {
   const app = BUILT_APP;
-  rmSync(app, { recursive: true, force: true });
+  // Everything the unsigned build packed goes: electron-builder skips a zip it finds "up to date",
+  // which shipped the unsigned app inside the release zip.
+  for (const name of readdirSync(RELEASE_DIR)) {
+    rmSync(path.join(RELEASE_DIR, name), { recursive: true, force: true });
+  }
   run("ditto", ["-x", "-k", path.join(runDir, SIGNED_ARCHIVE), path.dirname(app)], {
     step: "package",
     runDir,
