@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Installs the fork's release job on this Mac (sincoder): the tools clone the launch agent
-# runs from, the build clone it works in, and the launch agent itself. Safe to run again;
-# --clones-only stops before the launch agent (for a hand run with --dry-run).
+# runs from, the build clone it rebases in, and the launch agent itself. Safe to run again;
+# --clones-only stops before the launch agent (for a hand run with --dry-run). The build host
+# needs nothing installed: each run sets up what it uses there (fork/README.md, The job).
 set -euo pipefail
 
 root=${PASEO_FORK_ROOT:-$HOME/Coding/_forks/paseo-release}
