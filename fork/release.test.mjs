@@ -14,6 +14,7 @@ import {
   featureSubjects,
   forkOnlySubjects,
   forkVersion,
+  liveIsOpen,
   nextForkNumber,
   nodeMajorFromWorkflow,
   parseStableTag,
@@ -452,4 +453,15 @@ test("the build Mac's signing plan gives sincoder every path's options from elec
   assert.equal(helper.requirements, undefined);
   assert.equal(signing.ignore(path.join(app, "Contents/PlugIns/Skipped.plugin")), true);
   assert.equal(signing.ignore(path.join(app, "Contents/MacOS/Paseo")), false);
+});
+
+test("a run waits while Ableton Live is open, by pgrep's exact process name", () => {
+  const calls = [];
+  const fake = (status) => (cmd, args) => {
+    calls.push([cmd, ...args]);
+    return { status };
+  };
+  assert.equal(liveIsOpen(fake(0)), true);
+  assert.equal(liveIsOpen(fake(1)), false);
+  assert.deepEqual(calls[0], ["/usr/bin/pgrep", "-x", "Live"]);
 });
