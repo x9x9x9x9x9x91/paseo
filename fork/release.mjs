@@ -246,6 +246,14 @@ export function decide({ latestTag, baseTag, head, publishedCommit }) {
 }
 
 /** A candidate is retried until it has failed MAX_ATTEMPTS runs. */
+/**
+ * Whether Ableton Live runs on this Mac: the main's music comes first, so a run with work to do
+ * waits for an hour without Live (signing, notarizing and the conflict agent run here).
+ */
+export function liveIsOpen(run = spawnSync) {
+  return run("/usr/bin/pgrep", ["-x", "Live"], { stdio: "ignore" }).status === 0;
+}
+
 export function shouldSkipCandidate(failure, candidate) {
   return failure?.candidate === candidate && failure.attempts >= MAX_ATTEMPTS;
 }
@@ -1683,6 +1691,13 @@ function runOnce(options, state) {
     if (skip) log(`${ctx.candidate} failed ${MAX_ATTEMPTS} runs; waiting for a change`);
     if (!options.dryRun)
       writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
+    return 0;
+  }
+  if (!options.dryRun && liveIsOpen()) {
+    // Nothing counted and nothing failed: the same candidate is tried the next hour.
+    rmSync(runDir, { recursive: true, force: true });
+    log(`Ableton Live is open; ${ctx.candidate} waits for an hour without it`);
+    writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
     return 0;
   }
   if (options.retire) log(`rehearsing the handover on upstream ${ctx.latestTag}`);
