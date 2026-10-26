@@ -22,8 +22,11 @@ import {
   parseStableTag,
   patchesDaemon,
   pathsOutsideScope,
+  queueNotice,
   releaseFileNames,
   releaseFilesProblem,
+  releaseKey,
+  releaseNotices,
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
@@ -534,4 +537,114 @@ test("a notice with an ask goes to the door as an agent's ask, one without as a 
     "--key",
     "conflict resolved abc",
   ]);
+});
+
+test("a standing notice asks the door for the one note its key names, whatever the day", () => {
+  const args = deliverArgs({
+    level: "warn",
+    title: "t",
+    key: "release v0dot13dot2",
+    standing: true,
+    ask: "a",
+  });
+  assert.deepEqual(args.slice(-5), ["--standing", "--needs", "agent", "--ask", "a"]);
+  // The door drops a bare number from a key: two releases' keys differ in a word, not a number.
+  assert.equal(releaseKey("v0.13.2"), "release v0dot13dot2");
+  assert.notEqual(releaseKey("v0.13.1"), releaseKey("v0.13.2"));
+  assert.notEqual(releaseKey("v0.1.32"), releaseKey("v0.13.2"));
+});
+
+test("an upstream release's failures rewrite its one note, and its publish settles it as a report", () => {
+  const failed = {
+    step: "lint",
+    title: "Paseo fork release failed at lint (upstream v0.13.2)",
+    body: "b",
+    ask: "fix it",
+  };
+  const first = releaseNotices({ ctx: { latestTag: "v0.13.2" }, failed, runDir: "r1" });
+  assert.deepEqual(first, {
+    notices: [
+      {
+        level: "warn",
+        standing: true,
+        key: "release v0dot13dot2",
+        title: failed.title,
+        body: "b",
+        ask: "fix it",
+      },
+    ],
+    open: ["v0.13.2"],
+  });
+  // Another run on the same release, another step: the same note again, nothing more.
+  const again = releaseNotices({
+    ctx: { latestTag: "v0.13.2" },
+    open: first.open,
+    failed: { ...failed, step: "typecheck" },
+    runDir: "r2",
+  });
+  assert.deepEqual(
+    again.notices.map((notice) => notice.key),
+    ["release v0dot13dot2"],
+  );
+  assert.deepEqual(again.open, ["v0.13.2"]);
+
+  const out = releaseNotices({
+    ctx: { latestTag: "v0.13.2", version: "0.13.2-fork.1" },
+    open: again.open,
+    runDir: "/x/runs/r3",
+  });
+  assert.deepEqual(out.open, []);
+  assert.equal(out.notices.length, 1);
+  const [report] = out.notices;
+  assert.equal(report.key, "release v0dot13dot2");
+  assert.equal(report.standing, true);
+  assert.equal(report.level, "info");
+  assert.equal(report.ask, undefined);
+  assert.equal(report.title, "Paseo fork 0.13.2-fork.1 is out on upstream v0.13.2");
+  assert.match(report.body, /Run log: \/x\/runs\/r3 on sincoder/);
+  assert.doesNotMatch(report.body, /conflict/);
+});
+
+test("a newer upstream release settles an older one's note, and a quiet publish leaves none", () => {
+  const failed = { step: "github", title: "t", body: "b", ask: "a" };
+  const moved = releaseNotices({
+    ctx: { latestTag: "v0.13.2" },
+    open: ["v0.13.1"],
+    failed,
+    runDir: "r",
+  });
+  assert.deepEqual(
+    moved.notices.map((notice) => [notice.key, notice.level, Boolean(notice.ask)]),
+    [
+      ["release v0dot13dot1", "info", false],
+      ["release v0dot13dot2", "warn", true],
+    ],
+  );
+  assert.match(moved.notices[0].body, /its own note stands for this one/);
+  assert.deepEqual(moved.open, ["v0.13.2"]);
+
+  const publish = { latestTag: "v0.13.2", version: "0.13.2-fork.1" };
+  const skipped = releaseNotices({ ctx: publish, open: ["v0.13.1"], runDir: "r" });
+  assert.deepEqual(
+    skipped.notices.map((notice) => notice.key),
+    ["release v0dot13dot1"],
+  );
+  assert.match(skipped.notices[0].body, /0\.13\.2-fork\.1 is out/);
+
+  // A release that never failed publishes with no note, unless the conflict agent resolved one.
+  assert.deepEqual(releaseNotices({ ctx: publish, runDir: "r" }), { notices: [], open: [] });
+  const resolved = releaseNotices({ ctx: { ...publish, resolvedBy: "agent" }, runDir: "r" });
+  assert.equal(resolved.notices.length, 1);
+  assert.match(resolved.notices[0].body, /the conflict agent resolved it/);
+});
+
+test("a standing notice still waiting gives way to a newer one under its key", () => {
+  const state = { pendingNotices: [{ key: "closed pr1", title: "closed" }] };
+  queueNotice(state, { key: "release v0dot13dot2", standing: true, title: "failed" });
+  queueNotice(state, { key: "release v0dot13dot1", standing: true, title: "older" });
+  queueNotice(state, { key: "release v0dot13dot2", standing: true, title: "out" });
+  assert.deepEqual(
+    state.pendingNotices.map((notice) => notice.title),
+    ["closed", "older", "out"],
+  );
 });
