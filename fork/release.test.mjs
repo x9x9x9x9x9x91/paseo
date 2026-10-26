@@ -495,17 +495,26 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
   );
   // The night run groups asks by their line: a candidate's first and last notice are one subject.
   assert.equal(last.ask, first.ask);
-  assert.match(first.body, /Run log: \/x\/paseo-release\/runs\/2026-10-26T09-32-38\.733Z on sincoder/);
+  assert.match(
+    first.body,
+    /Run log: \/x\/paseo-release\/runs\/2026-10-26T09-32-38\.733Z on sincoder/,
+  );
   assert.match(last.body, /attempt 3 of 3/);
   assert.ok(!first.ask.includes("\n"));
 
   const conflict = notice("conflict", undefined, 1, "r");
   assert.equal(conflict.step, "rebase");
-  assert.match(conflict.ask, /^Find why upstream v0\.13\.1 conflicts with the fork's commits on branch d975b4af3 from \/x\/paseo-release\/job\.log /);
+  assert.match(
+    conflict.ask,
+    /^Find why upstream v0\.13\.1 conflicts with the fork's commits on branch d975b4af3 from \/x\/paseo-release\/job\.log /,
+  );
   assert.match(conflict.body, /conflicted in packages\/app\/a\.tsx/);
 
   const retire = notice("failed", { step: "retire", message: "held" }, 1, "r");
-  assert.match(retire.ask, /^Find which merged features' commits leave fork\/release .* is Tim's word$/);
+  assert.match(
+    retire.ask,
+    /^Find which merged features' commits leave fork\/release .* is Tim's word$/,
+  );
   assert.equal(notice("failed", { message: "boom" }, 1, "r").step, "job");
 });
 
