@@ -12,7 +12,7 @@ import {
   decide,
   deliverArgs,
   dropFromTodo,
-  failureAsk,
+  failureNotice,
   featureSubjects,
   forkOnlySubjects,
   forkVersion,
@@ -468,20 +468,61 @@ test("a run waits while Ableton Live is open, by pgrep's exact process name", ()
   assert.deepEqual(calls[0], ["/usr/bin/pgrep", "-x", "Live"]);
 });
 
-test("a failed run's notice is an agent's ask naming job.log and the run's folder, the others are notes", () => {
-  const runDir = "/x/paseo-release/runs/2026-10-26T09-32-38.733Z";
-  const lint = failureAsk({ step: "lint", latestTag: "v0.13.1", runDir, jobLog: "/x/paseo-release/job.log" });
+test("a failed run's notice is an agent's ask naming job.log and the runs folder, one line per candidate", () => {
+  const ctx = {
+    latestTag: "v0.13.1",
+    head: "d975b4af3777b9c7e645b1d37a63abdcee16504e",
+    conflict: { files: ["packages/app/a.tsx"], diff: "<<<<<<<" },
+  };
+  const paths = { jobLog: "/x/paseo-release/job.log", runs: "/x/paseo-release/runs" };
+  const notice = (outcome, error, attempts, run) =>
+    failureNotice({
+      outcome,
+      error,
+      ctx,
+      attempts,
+      previous: "0.12.0-fork.2",
+      runDir: `/x/paseo-release/runs/${run}`,
+      ...paths,
+    });
+  const lint = { step: "lint", message: "lint failed" };
+  const first = notice("failed", lint, 1, "2026-10-26T09-32-38.733Z");
+  const last = notice("failed", lint, 3, "2026-10-26T11-35-02.104Z");
+  assert.equal(first.step, "lint");
   assert.equal(
-    lint,
-    "Find why the fork release failed at lint from /x/paseo-release/job.log and /x/paseo-release/runs/2026-10-26T09-32-38.733Z/ and fix it on fork/release",
+    first.ask,
+    "Find why the fork release failed at lint for upstream v0.13.1 with branch d975b4af3 from /x/paseo-release/job.log and the run folder under /x/paseo-release/runs/ this notice names, and fix it on fork/release",
   );
-  assert.match(
-    failureAsk({ step: "rebase", latestTag: "v0.13.1", runDir }),
-    /^Find why upstream v0\.13\.1 conflicts with the fork's commits from \S+job\.log and \S+\/runs\/\S+\/ and fix it on fork\/release$/,
-  );
-  const failed = deliverArgs({ level: "warn", title: "failed", key: "lint abc first", ask: lint });
-  assert.deepEqual(failed.slice(-4), ["--needs", "agent", "--ask", lint]);
-  const resolved = deliverArgs({ level: "info", title: "resolved", key: "conflict resolved abc" });
-  assert.ok(!resolved.includes("--needs") && !resolved.includes("--ask"));
-  assert.deepEqual(resolved.slice(0, 3), ["deliver", "--source", "paseo-fork"]);
+  // The night run groups asks by their line: a candidate's first and last notice are one subject.
+  assert.equal(last.ask, first.ask);
+  assert.match(first.body, /Run log: \/x\/paseo-release\/runs\/2026-10-26T09-32-38\.733Z on sincoder/);
+  assert.match(last.body, /attempt 3 of 3/);
+  assert.ok(!first.ask.includes("\n"));
+
+  const conflict = notice("conflict", undefined, 1, "r");
+  assert.equal(conflict.step, "rebase");
+  assert.match(conflict.ask, /^Find why upstream v0\.13\.1 conflicts with the fork's commits on branch d975b4af3 from \/x\/paseo-release\/job\.log /);
+  assert.match(conflict.body, /conflicted in packages\/app\/a\.tsx/);
+
+  const retire = notice("failed", { step: "retire", message: "held" }, 1, "r");
+  assert.match(retire.ask, /^Find which merged features' commits leave fork\/release .* is Tim's word$/);
+  assert.equal(notice("failed", { message: "boom" }, 1, "r").step, "job");
+});
+
+test("a notice with an ask goes to the door as an agent's ask, one without as a note", () => {
+  const ask = "Find why the fork release failed at lint";
+  const asked = deliverArgs({ level: "warn", title: "failed", key: "lint abc first", ask });
+  assert.deepEqual(asked.slice(-4), ["--needs", "agent", "--ask", ask]);
+  const note = deliverArgs({ level: "info", title: "resolved", key: "conflict resolved abc" });
+  assert.deepEqual(note, [
+    "deliver",
+    "--source",
+    "paseo-fork",
+    "--level",
+    "info",
+    "--title",
+    "resolved",
+    "--key",
+    "conflict resolved abc",
+  ]);
 });
