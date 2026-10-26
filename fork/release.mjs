@@ -119,6 +119,14 @@ const SIGNED_ARCHIVE = "signed-app.zip";
 // A candidate that failed this many runs waits for a new upstream release or a new commit on
 // the branch instead of rebuilding every hour.
 const MAX_ATTEMPTS = 3;
+// The steps that talk to GitHub (its API, the push to the fork, the release upload) or Apple's
+// notary. Their failure is most often the service's or the network's, which no commit on the
+// branch fixes, so it counts toward MAX_ATTEMPTS only once OUTSIDE_GRACE_MS have passed since the
+// first of the failed runs running at these steps: a day of GitHub or the notary down is retried
+// every hour, and a fault that lasts (an expired notary profile, a token that may not upload a
+// release) still stops the hourly rebuilds.
+export const OUTSIDE_STEPS = new Set(["github", "push", "publish", "notarize"]);
+const OUTSIDE_GRACE_MS = 24 * 60 * 60_000;
 // The features' browser specs are the ones the branch adds or changes against upstream's tag,
 // read from the branch each run, so no rebase or hand edit can leave a feature's spec out of
 // the gate. A `.real.spec.ts` needs a real provider and is not in the browser project.
@@ -245,7 +253,6 @@ export function decide({ latestTag, baseTag, head, publishedCommit }) {
   return publishedCommit === head ? "current" : "release";
 }
 
-/** A candidate is retried until it has failed MAX_ATTEMPTS runs. */
 /**
  * Whether Ableton Live runs on this Mac: the main's music comes first, so a run with work to do
  * waits for an hour without Live (signing, notarizing and the conflict agent run here).
@@ -254,8 +261,38 @@ export function liveIsOpen(spawn = spawnSync) {
   return spawn("/usr/bin/pgrep", ["-x", "Live"], { stdio: "ignore" }).status === 0;
 }
 
+/**
+ * Whether a notarize that was not accepted is the notary's (down, still in progress at the
+ * timeout) rather than the app's: Apple's answer that the app is Invalid is the signing's fault.
+ */
+export function notaryOutside(output) {
+  return !/status: (Invalid|Rejected)/.test(output);
+}
+
+/** A candidate is retried until MAX_ATTEMPTS of its failed runs have counted. */
 export function shouldSkipCandidate(failure, candidate) {
   return failure?.candidate === candidate && failure.attempts >= MAX_ATTEMPTS;
+}
+
+/**
+ * A candidate's failure record after one more failed run (`at`, an ISO time), and whether the run
+ * counted. `attempts` is the runs counted against the candidate; `outsideSince` is the first of
+ * its failed runs running at an outside step (StepFailure's `outside`), which counts only once
+ * OUTSIDE_GRACE_MS have passed since then. A failure of the branch's own counts at once and ends
+ * that run of outside failures.
+ */
+export function countFailure(previous, { candidate, outside, at }) {
+  const failure = previous?.candidate === candidate ? { ...previous } : { candidate, attempts: 0 };
+  let counted = true;
+  if (outside) {
+    failure.outsideSince ??= at;
+    counted = Date.parse(at) - Date.parse(failure.outsideSince) >= OUTSIDE_GRACE_MS;
+  } else {
+    delete failure.outsideSince;
+  }
+  if (counted) failure.attempts += 1;
+  failure.at = at;
+  return { failure, counted };
 }
 
 export function nodeMajorFromWorkflow(workflow) {
@@ -300,11 +337,13 @@ export function sameRequirement(printed, expected) {
   return plain(printed) === plain(expected);
 }
 
+/** A failed step; `outside` when the fault is most likely GitHub's or Apple's (OUTSIDE_STEPS). */
 class StepFailure extends Error {
-  constructor(step, message, logFile = null) {
+  constructor(step, message, logFile = null, outside = OUTSIDE_STEPS.has(step)) {
     super(message);
     this.step = step;
     this.logFile = logFile;
+    this.outside = outside;
   }
 }
 
@@ -1064,14 +1103,16 @@ function notarize({ app, runDir }) {
       "--timeout",
       "1h",
     ],
-    { step, runDir, timeoutMs: 70 * 60_000 },
+    // quiet, so Apple's answer is read whatever notarytool exits with
+    { step, runDir, timeoutMs: 70 * 60_000, quiet: true },
   );
   rmSync(archive, { force: true });
-  if (!/status: Accepted/.test(submitted.output)) {
+  if (submitted.status !== 0 || !/status: Accepted/.test(submitted.output)) {
     throw new StepFailure(
       step,
-      `Apple did not accept the app:\n${submitted.output}`,
+      `Apple did not accept the app (exit ${submitted.status}):\n${submitted.output}`,
       path.join(runDir, `${step}.log`),
+      notaryOutside(submitted.output),
     );
   }
   run("xcrun", ["stapler", "staple", app], { step, runDir });
@@ -1430,10 +1471,13 @@ function release({ ctx, options, runDir, features, checks = null, handover = fal
     // Upstream's tagged commit need not be on any fork branch; the release's own tag carries
     // it there, and the branch stays where its last feature release left it. Forced, because
     // a run that died before creating the release can have left the tag on an older commit.
-    git(["push", "--force", "origin", `${target}:refs/tags/${ctx.version}`], { runDir });
+    git(["push", "--force", "origin", `${target}:refs/tags/${ctx.version}`], {
+      step: "push",
+      runDir,
+    });
   } else if (target !== ctx.head) {
     const lease = `--force-with-lease=${options.branch}:${ctx.head}`;
-    git(["push", lease, "origin", `HEAD:refs/heads/${options.branch}`], { runDir });
+    git(["push", lease, "origin", `HEAD:refs/heads/${options.branch}`], { step: "push", runDir });
   }
   publish({
     version: ctx.version,
@@ -1548,6 +1592,8 @@ export function failureNotice({
   error,
   ctx,
   attempts,
+  counted = true,
+  outsideSince,
   previous,
   runDir,
   jobLog = JOB_LOG,
@@ -1568,15 +1614,21 @@ export function failureNotice({
   }
   const step = error.step ?? "job";
   // A retirement held by a fork-only feature is a hand step, no bug: commits leave the
-  // published branch, which is Tim's word (README, Retirement).
-  const ask =
-    step === "retire"
-      ? `Find which merged features' commits leave ${RELEASE_BRANCH} and which pulls leave UPSTREAM_PULLS for upstream ${ctx.latestTag} with branch ${head} ${from}, by fork/README.md's Retirement; taking commits off the published branch is Tim's word`
-      : `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`;
+  // published branch, which is Tim's word (README, Retirement). A step outside the branch
+  // (OUTSIDE_STEPS) is retried by the job itself, so its ask says a service's fault needs nothing.
+  let ask = `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`;
+  if (step === "retire") {
+    ask = `Find which merged features' commits leave ${RELEASE_BRANCH} and which pulls leave UPSTREAM_PULLS for upstream ${ctx.latestTag} with branch ${head} ${from}, by fork/README.md's Retirement; taking commits off the published branch is Tim's word`;
+  } else if (error.outside) {
+    ask = `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}; GitHub or Apple's notary down needs no fix, since the job runs the step again every hour, and anything else is fixed on ${RELEASE_BRANCH} or named as Tim's step`;
+  }
+  const count = counted
+    ? `This was attempt ${attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${head}; after that the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.`
+    : `The ${step} step talks to GitHub or Apple, so this run is not counted against upstream ${ctx.latestTag} with branch ${head}: the job runs it again every hour, and counts such failures only once they have gone on for a day (since ${outsideSince}).`;
   return {
     step,
     title: `Paseo fork release failed at ${step} (upstream ${ctx.latestTag})`,
-    body: `${error.message}\n\nThe app stays on ${previous}. This was attempt ${attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${head}; after that the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`,
+    body: `${error.message}\n\nThe app stays on ${previous}. ${count}\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`,
     ask,
   };
 }
@@ -1677,17 +1729,18 @@ function settle({ outcome, error, ctx, state, runDir }) {
     });
     log(`retired on ${ctx.latestTag} with ${ctx.version}`);
   } else {
-    const failure =
-      state.failure?.candidate === ctx.candidate
-        ? { ...state.failure }
-        : { candidate: ctx.candidate, attempts: 0 };
-    failure.attempts += 1;
-    failure.at = stamp;
+    const { failure, counted } = countFailure(state.failure, {
+      candidate: ctx.candidate,
+      outside: outcome !== "conflict" && Boolean(error?.outside),
+      at: stamp,
+    });
     const failed = failureNotice({
       outcome,
       error,
       ctx,
       attempts: failure.attempts,
+      counted,
+      outsideSince: failure.outsideSince,
       previous,
       runDir,
     });
