@@ -1226,9 +1226,10 @@ function shellQuote(value) {
 /**
  * The door's words for a notice. One with an `ask` comes as an agent's ask, which Alma's night
  * run (agent-asks) takes by fork/README.md and turns into a row a lane builds; the rest are notes
- * for Tim to read.
+ * for Tim to read. A standing one is the one note its key names whatever the day, rewritten by
+ * each delivery.
  */
-export function deliverArgs({ level, title, key, ask }) {
+export function deliverArgs({ level, title, key, ask, standing }) {
   return [
     "deliver",
     "--source",
@@ -1239,14 +1240,14 @@ export function deliverArgs({ level, title, key, ask }) {
     title,
     "--key",
     key,
+    ...(standing ? ["--standing"] : []),
     ...(ask ? ["--needs", "agent", "--ask", ask] : []),
   ];
 }
 
 /**
  * Deliver a notice through Alma's door; false when it could not take it. The door keeps one note
- * per key and day and drops bare numbers from it, so the key carries the branch head to keep two
- * releases' notices apart.
+ * per key and day, or one per key for a standing notice, and drops bare numbers from the key.
  */
 function notify(notice) {
   const args = deliverArgs(notice);
@@ -1260,9 +1261,16 @@ function notify(notice) {
   return result.status === 0;
 }
 
-/** A notice goes out now, or waits in state for the next run when the door cannot take it. */
-function queueNotice(state, notice) {
-  state.pendingNotices = [...(state.pendingNotices ?? []), notice];
+/**
+ * A notice goes out now, or waits in state for the next run when the door cannot take it. A
+ * standing notice takes the place of one still waiting under its key, so an older run's ask
+ * delivered late never rewrites the report a newer run left on the note.
+ */
+export function queueNotice(state, notice) {
+  const waiting = (state.pendingNotices ?? []).filter(
+    (queued) => !(notice.standing && queued.standing && queued.key === notice.key),
+  );
+  state.pendingNotices = [...waiting, notice];
 }
 
 /** Every waiting notice the door takes leaves state; true when any went out. */
@@ -1533,7 +1541,7 @@ function work({ ctx, options, plan, runDir }) {
  * that Alma's night run takes. The night run takes the newest ask of a subject for the older ones
  * and reads the subject off the ask's line, so the line names only what stays the same for one
  * candidate (the step, upstream's tag, the branch head) and the job's log; the body names the
- * run's own folder, which the first and the last notice of a candidate do not share.
+ * run's own folder, which each run's rewrite of the release's note changes.
  */
 export function failureNotice({
   outcome,
@@ -1573,6 +1581,56 @@ export function failureNotice({
   };
 }
 
+/**
+ * An upstream release's note, the one key every run on it delivers under. The door drops a bare
+ * number from a key, so the tag's dots become a word and v0.13.1 and v0.13.2 stay two notes.
+ */
+export function releaseKey(tag) {
+  return `release ${tag.replaceAll(".", "dot")}`;
+}
+
+/**
+ * The release notes a run leaves (ALM-3379): one standing note per upstream release, which each
+ * failed run rewrites as its newest ask, so a release that fails for days is one note, never one
+ * per attempt. `open` is the releases whose note is an open ask. A failure (`failed`, its
+ * failureNotice) rewrites the built release's note and settles an older release's as a report;
+ * a published or retired run rewrites each open note as a report that needs nobody, the built
+ * release's saying what went out, a resolved conflict included. Returns the notices and the
+ * releases left open.
+ */
+export function releaseNotices({ ctx, open = [], failed, runDir }) {
+  const built = ctx.latestTag;
+  const notices = open
+    .filter((tag) => tag !== built)
+    .map((tag) => ({
+      level: "info",
+      standing: true,
+      key: releaseKey(tag),
+      title: `Paseo fork: upstream ${tag} got no fork release, ${built} came out first`,
+      body: failed
+        ? `Upstream ${built} came out before a fork release of ${tag} passed its checks, so the job builds ${built} now; its own note stands for this one.\n`
+        : `Upstream ${built} came out before a fork release of ${tag} passed its checks, so the job built ${built} instead, and ${ctx.version} is out.\n`,
+    }));
+  if (failed) {
+    const { title, body, ask } = failed;
+    notices.push({ level: "warn", standing: true, key: releaseKey(built), title, body, ask });
+    return { notices, open: [built] };
+  }
+  if (open.includes(built) || ctx.resolvedBy) {
+    const conflict = ctx.resolvedBy
+      ? ` Upstream ${built} conflicted with the fork's commits, and the conflict agent resolved it before every check passed.`
+      : "";
+    notices.push({
+      level: "info",
+      standing: true,
+      key: releaseKey(built),
+      title: `Paseo fork ${ctx.version} is out on upstream ${built}`,
+      body: `The fork release of upstream ${built} passed every check and ${ctx.version} is published; your app takes it at its next update.${conflict}\n\nRun log: ${runDir} on sincoder.\n`,
+    });
+  }
+  return { notices, open: [] };
+}
+
 /** Record the run and tell Tim what needs him: a failure, a conflict, a retirement. */
 function settle({ outcome, error, ctx, state, runDir }) {
   const stamp = now();
@@ -1587,14 +1645,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
       at: stamp,
     };
     delete next.failure;
-    if (ctx.resolvedBy) {
-      queueNotice(next, {
-        level: "info",
-        key: `conflict resolved ${ctx.publishedCommit}`,
-        title: `Paseo fork ${ctx.version}: an upstream conflict was resolved`,
-        body: `Upstream ${ctx.latestTag} conflicted with the fork's commits. The conflict agent resolved it and every check passed before ${ctx.version} was published.\n\nRun log: ${runDir} on sincoder.\n`,
-      });
-    }
+    settleNotes(next, releaseNotices({ ctx, open: state.openNotes, runDir }));
     for (const commit of ctx.superseded ?? []) {
       const pulls = commit.pulls.map((pull) => `https://github.com/${UPSTREAM_REPO}/pull/${pull}`);
       queueNotice(next, {
@@ -1615,6 +1666,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
     };
     next.retired = { upstreamTag: ctx.latestTag, handover: ctx.version, at: stamp };
     delete next.failure;
+    settleNotes(next, releaseNotices({ ctx, open: state.openNotes, runDir }));
     retireLaunchAgent();
     const handover = `https://github.com/${FORK_REPO}/releases/tag/${ctx.version}`;
     queueNotice(next, {
@@ -1631,7 +1683,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
         : { candidate: ctx.candidate, attempts: 0 };
     failure.attempts += 1;
     failure.at = stamp;
-    const { step, title, body, ask } = failureNotice({
+    const failed = failureNotice({
       outcome,
       error,
       ctx,
@@ -1639,17 +1691,21 @@ function settle({ outcome, error, ctx, state, runDir }) {
       previous,
       runDir,
     });
-    failure.step = step;
+    failure.step = failed.step;
     next.failure = failure;
-    if (failure.attempts === 1 || failure.attempts === MAX_ATTEMPTS) {
-      const round = failure.attempts === 1 ? "first" : "last";
-      queueNotice(next, { level: "warn", title, body, key: `${step} ${ctx.head} ${round}`, ask });
-    }
-    log(`${outcome}: ${title}`);
+    settleNotes(next, releaseNotices({ ctx, open: state.openNotes, failed, runDir }));
+    log(`${outcome}: ${failed.title}`);
   }
   deliverNotices(next);
   writeState(next);
   return outcome === "published" || outcome === "retired" ? 0 : 1;
+}
+
+/** The release notes go out after whatever waits, and state keeps the releases left open. */
+function settleNotes(state, { notices, open }) {
+  for (const notice of notices) queueNotice(state, notice);
+  if (open.length > 0) state.openNotes = open;
+  else delete state.openNotes;
 }
 
 function flushPendingNotices(state) {
