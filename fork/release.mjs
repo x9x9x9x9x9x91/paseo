@@ -250,8 +250,8 @@ export function decide({ latestTag, baseTag, head, publishedCommit }) {
  * Whether Ableton Live runs on this Mac: the main's music comes first, so a run with work to do
  * waits for an hour without Live (signing, notarizing and the conflict agent run here).
  */
-export function liveIsOpen(run = spawnSync) {
-  return run("/usr/bin/pgrep", ["-x", "Live"], { stdio: "ignore" }).status === 0;
+export function liveIsOpen(spawn = spawnSync) {
+  return spawn("/usr/bin/pgrep", ["-x", "Live"], { stdio: "ignore" }).status === 0;
 }
 
 export function shouldSkipCandidate(failure, candidate) {
