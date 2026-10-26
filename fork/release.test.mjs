@@ -10,7 +10,9 @@ import {
   closedPulls,
   compareStableTags,
   decide,
+  deliverArgs,
   dropFromTodo,
+  failureAsk,
   featureSubjects,
   forkOnlySubjects,
   forkVersion,
@@ -464,4 +466,22 @@ test("a run waits while Ableton Live is open, by pgrep's exact process name", ()
   assert.equal(liveIsOpen(fake(0)), true);
   assert.equal(liveIsOpen(fake(1)), false);
   assert.deepEqual(calls[0], ["/usr/bin/pgrep", "-x", "Live"]);
+});
+
+test("a failed run's notice is an agent's ask naming job.log and the run's folder, the others are notes", () => {
+  const runDir = "/x/paseo-release/runs/2026-10-26T09-32-38.733Z";
+  const lint = failureAsk({ step: "lint", latestTag: "v0.13.1", runDir, jobLog: "/x/paseo-release/job.log" });
+  assert.equal(
+    lint,
+    "Find why the fork release failed at lint from /x/paseo-release/job.log and /x/paseo-release/runs/2026-10-26T09-32-38.733Z/ and fix it on fork/release",
+  );
+  assert.match(
+    failureAsk({ step: "rebase", latestTag: "v0.13.1", runDir }),
+    /^Find why upstream v0\.13\.1 conflicts with the fork's commits from \S+job\.log and \S+\/runs\/\S+\/ and fix it on fork\/release$/,
+  );
+  const failed = deliverArgs({ level: "warn", title: "failed", key: "lint abc first", ask: lint });
+  assert.deepEqual(failed.slice(-4), ["--needs", "agent", "--ask", lint]);
+  const resolved = deliverArgs({ level: "info", title: "resolved", key: "conflict resolved abc" });
+  assert.ok(!resolved.includes("--needs") && !resolved.includes("--ask"));
+  assert.deepEqual(resolved.slice(0, 3), ["deliver", "--source", "paseo-fork"]);
 });
