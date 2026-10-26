@@ -16,8 +16,13 @@ const BUILDS = "prj_builds";
 
 const chosenChats: AttentionProjects = { scope: "chosen", projectIds: [CHATS] };
 
+// Upstream's sort times, required since v0.13.0. Spread in, so a base before it, which has neither,
+// takes them too; once fork/release is on v0.13.0 or later they can be plain fields again.
+const sortTimes = { createdAt: null, lastUserMessageAt: null };
+
 function workspace(id: string, projectId: string): WorkspaceDescriptor {
   return {
+    ...sortTimes,
     id,
     projectId,
     projectDisplayName: projectId,
