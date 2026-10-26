@@ -1243,15 +1243,6 @@ export function deliverArgs({ level, title, key, ask }) {
   ];
 }
 
-/** A failed run's ask: what failed, and the job's log and the run's folder that say why. */
-export function failureAsk({ step, latestTag, runDir, jobLog = JOB_LOG }) {
-  const what =
-    step === "rebase"
-      ? `why upstream ${latestTag} conflicts with the fork's commits`
-      : `why the fork release failed at ${step}`;
-  return `Find ${what} from ${jobLog} and ${runDir}/ and fix it on ${RELEASE_BRANCH}`;
-}
-
 /**
  * Deliver a notice through Alma's door; false when it could not take it. The door keeps one note
  * per key and day and drops bare numbers from it, so the key carries the branch head to keep two
@@ -1537,6 +1528,51 @@ function work({ ctx, options, plan, runDir }) {
   return "published";
 }
 
+/**
+ * A failed run's notice, a conflict the agent could not resolve included, with the agent's ask
+ * that Alma's night run takes. The night run takes the newest ask of a subject for the older ones
+ * and reads the subject off the ask's line, so the line names only what stays the same for one
+ * candidate (the step, upstream's tag, the branch head) and the job's log; the body names the
+ * run's own folder, which the first and the last notice of a candidate do not share.
+ */
+export function failureNotice({
+  outcome,
+  error,
+  ctx,
+  attempts,
+  previous,
+  runDir,
+  jobLog = JOB_LOG,
+  runs = RUNS,
+}) {
+  const head = ctx.head.slice(0, 9);
+  const from = `from ${jobLog} and the run folder under ${runs}/ this notice names`;
+  if (outcome === "conflict") {
+    const where = ctx.conflict.files.length
+      ? `conflicted in ${ctx.conflict.files.join(", ")}`
+      : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
+    return {
+      step: "rebase",
+      title: `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`,
+      body: `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not resolve it. The app stays on ${previous}.\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`,
+      ask: `Find why upstream ${ctx.latestTag} conflicts with the fork's commits on branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`,
+    };
+  }
+  const step = error.step ?? "job";
+  // A retirement held by a fork-only feature is a hand step, no bug: commits leave the
+  // published branch, which is Tim's word (README, Retirement).
+  const ask =
+    step === "retire"
+      ? `Find which merged features' commits leave ${RELEASE_BRANCH} and which pulls leave UPSTREAM_PULLS for upstream ${ctx.latestTag} with branch ${head} ${from}, by fork/README.md's Retirement; taking commits off the published branch is Tim's word`
+      : `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`;
+  return {
+    step,
+    title: `Paseo fork release failed at ${step} (upstream ${ctx.latestTag})`,
+    body: `${error.message}\n\nThe app stays on ${previous}. This was attempt ${attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${head}; after that the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`,
+    ask,
+  };
+}
+
 /** Record the run and tell Tim what needs him: a failure, a conflict, a retirement. */
 function settle({ outcome, error, ctx, state, runDir }) {
   const stamp = now();
@@ -1595,30 +1631,19 @@ function settle({ outcome, error, ctx, state, runDir }) {
         : { candidate: ctx.candidate, attempts: 0 };
     failure.attempts += 1;
     failure.at = stamp;
-    let title;
-    let body;
-    if (outcome === "conflict") {
-      failure.step = "rebase";
-      title = `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`;
-      const where = ctx.conflict.files.length
-        ? `conflicted in ${ctx.conflict.files.join(", ")}`
-        : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
-      body = `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not resolve it. The app stays on ${previous}.\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`;
-    } else {
-      failure.step = error.step ?? "job";
-      title = `Paseo fork release failed at ${failure.step} (upstream ${ctx.latestTag})`;
-      body = `${error.message}\n\nThe app stays on ${previous}. This was attempt ${failure.attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${ctx.head.slice(0, 9)}; after that the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`;
-    }
+    const { step, title, body, ask } = failureNotice({
+      outcome,
+      error,
+      ctx,
+      attempts: failure.attempts,
+      previous,
+      runDir,
+    });
+    failure.step = step;
     next.failure = failure;
     if (failure.attempts === 1 || failure.attempts === MAX_ATTEMPTS) {
       const round = failure.attempts === 1 ? "first" : "last";
-      queueNotice(next, {
-        level: "warn",
-        title,
-        body,
-        key: `${failure.step} ${ctx.head} ${round}`,
-        ask: failureAsk({ step: failure.step, latestTag: ctx.latestTag, runDir }),
-      });
+      queueNotice(next, { level: "warn", title, body, key: `${step} ${ctx.head} ${round}`, ask });
     }
     log(`${outcome}: ${title}`);
   }
