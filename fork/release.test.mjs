@@ -9,6 +9,7 @@ import {
   branchSpecs,
   closedPulls,
   compareStableTags,
+  countFailure,
   decide,
   deliverArgs,
   dropFromTodo,
@@ -19,6 +20,8 @@ import {
   liveIsOpen,
   nextForkNumber,
   nodeMajorFromWorkflow,
+  notaryOutside,
+  OUTSIDE_STEPS,
   parseStableTag,
   patchesDaemon,
   pathsOutsideScope,
@@ -222,6 +225,62 @@ test("a candidate is skipped after three failed runs, not before", () => {
   assert.equal(shouldSkipCandidate({ ...failure, attempts: 3 }, "v0.11.4@abc"), true);
   assert.equal(shouldSkipCandidate({ ...failure, attempts: 3 }, "v0.11.5@abc"), false);
   assert.equal(shouldSkipCandidate(undefined, "v0.11.4@abc"), false);
+});
+
+test("a failure outside the branch counts only after a day of them, the branch's own at once", () => {
+  const candidate = "v0.13.2@abc";
+  const hour = (h) => new Date(Date.UTC(2026, 9, 26, 10) + h * 3_600_000).toISOString();
+  const outside = { candidate, outside: true };
+  // GitHub or the notary down for a day: every hourly run is tried, none counted
+  let failure;
+  for (let h = 0; h < 24; h += 1) {
+    const run = countFailure(failure, { ...outside, at: hour(h) });
+    assert.equal(run.counted, false, `hour ${h}`);
+    failure = run.failure;
+  }
+  assert.equal(failure.attempts, 0);
+  assert.equal(failure.outsideSince, hour(0));
+  assert.equal(shouldSkipCandidate(failure, candidate), false);
+  // a fault that lasts counts from the day on, and holds the candidate three runs later
+  for (let h = 24; h < 27; h += 1) {
+    const run = countFailure(failure, { ...outside, at: hour(h) });
+    assert.equal(run.counted, true, `hour ${h}`);
+    failure = run.failure;
+  }
+  assert.equal(failure.attempts, 3);
+  assert.equal(shouldSkipCandidate(failure, candidate), true);
+
+  // the branch's own failure counts at once and ends a run of outside ones
+  let mixed = countFailure(undefined, { ...outside, at: hour(0) }).failure;
+  mixed = countFailure(mixed, { candidate, outside: false, at: hour(1) });
+  assert.equal(mixed.counted, true);
+  assert.equal(mixed.failure.attempts, 1);
+  assert.equal(mixed.failure.outsideSince, undefined);
+  const again = countFailure(mixed.failure, { ...outside, at: hour(30) });
+  assert.equal(again.counted, false);
+  assert.equal(again.failure.outsideSince, hour(30));
+
+  // a new candidate starts over; a record from before outsideSince keeps its count
+  const fresh = countFailure(failure, { candidate: "v0.13.2@def", outside: true, at: hour(40) });
+  assert.deepEqual(fresh.failure, {
+    candidate: "v0.13.2@def",
+    attempts: 0,
+    outsideSince: hour(40),
+    at: hour(40),
+  });
+  const old = countFailure({ candidate, attempts: 2, step: "lint" }, { ...outside, at: hour(0) });
+  assert.equal(old.failure.attempts, 2);
+  assert.equal(old.counted, false);
+
+  assert.deepEqual([...OUTSIDE_STEPS].sort(), ["github", "notarize", "publish", "push"]);
+});
+
+test("a notarize Apple answered Invalid is the app's, one the notary never finished is the notary's", () => {
+  assert.equal(notaryOutside("id: 1\n  status: Invalid\n"), false);
+  assert.equal(notaryOutside("id: 1\n  status: Rejected\n"), false);
+  assert.equal(notaryOutside("id: 1\n  status: In Progress\nTimeout of 1h reached"), true);
+  assert.equal(notaryOutside("Error: HTTP status code: 503"), true);
+  assert.equal(notaryOutside(""), true);
 });
 
 test("the Node major comes from upstream's release workflow", () => {
@@ -519,6 +578,33 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
     /^Find which merged features' commits leave fork\/release .* is Tim's word$/,
   );
   assert.equal(notice("failed", { message: "boom" }, 1, "r").step, "job");
+
+  // a step outside the branch, not yet counted: the body says the job retries it, the ask that
+  // a service's fault needs no fix
+  const github = { step: "github", message: "gh api: exit 1", outside: true };
+  const uncounted = failureNotice({
+    outcome: "failed",
+    error: github,
+    ctx,
+    attempts: 0,
+    counted: false,
+    outsideSince: "2026-10-26T09:00:00.000Z",
+    previous: "0.12.0-fork.2",
+    runDir: "/x/paseo-release/runs/r",
+    ...paths,
+  });
+  assert.match(uncounted.body, /not counted against upstream v0\.13\.1 with branch d975b4af3/);
+  assert.match(uncounted.body, /since 2026-10-26T09:00:00\.000Z/);
+  assert.doesNotMatch(uncounted.body, /attempt \d of/);
+  assert.match(
+    uncounted.ask,
+    /^Find why the fork release failed at github .*; GitHub or Apple's notary down needs no fix/,
+  );
+  assert.ok(!uncounted.ask.includes("\n"));
+  // counted once it has lasted a day, with the same ask, so it stays one subject
+  const lasted = notice("failed", github, 1, "r2");
+  assert.match(lasted.body, /attempt 1 of 3/);
+  assert.equal(lasted.ask, uncounted.ask);
 });
 
 test("a notice with an ask goes to the door as an agent's ask, one without as a note", () => {
