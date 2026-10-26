@@ -1224,12 +1224,12 @@ function shellQuote(value) {
 }
 
 /**
- * Deliver a notice through Alma's door; false when it could not take it. The door keeps one note
- * per key and day and drops bare numbers from it, so the key carries the branch head to keep two
- * releases' notices apart.
+ * The door's words for a notice. One with an `ask` comes as an agent's ask, which Alma's night
+ * run (agent-asks) takes by fork/README.md and turns into a row a lane builds; the rest are notes
+ * for Tim to read.
  */
-function notify({ level, title, body, key }) {
-  const args = [
+export function deliverArgs({ level, title, key, ask }) {
+  return [
     "deliver",
     "--source",
     "paseo-fork",
@@ -1239,9 +1239,28 @@ function notify({ level, title, body, key }) {
     title,
     "--key",
     key,
+    ...(ask ? ["--needs", "agent", "--ask", ask] : []),
   ];
+}
+
+/** A failed run's ask: what failed, and the job's log and the run's folder that say why. */
+export function failureAsk({ step, latestTag, runDir, jobLog = JOB_LOG }) {
+  const what =
+    step === "rebase"
+      ? `why upstream ${latestTag} conflicts with the fork's commits`
+      : `why the fork release failed at ${step}`;
+  return `Find ${what} from ${jobLog} and ${runDir}/ and fix it on ${RELEASE_BRANCH}`;
+}
+
+/**
+ * Deliver a notice through Alma's door; false when it could not take it. The door keeps one note
+ * per key and day and drops bare numbers from it, so the key carries the branch head to keep two
+ * releases' notices apart.
+ */
+function notify(notice) {
+  const args = deliverArgs(notice);
   const result = spawnSync("/usr/bin/python3", [NOTIFY_SCRIPT, ...args], {
-    input: body,
+    input: notice.body,
     encoding: "utf8",
     timeout: 120_000,
   });
@@ -1598,6 +1617,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
         title,
         body,
         key: `${failure.step} ${ctx.head} ${round}`,
+        ask: failureAsk({ step: failure.step, latestTag: ctx.latestTag, runDir }),
       });
     }
     log(`${outcome}: ${title}`);
