@@ -44,41 +44,15 @@ const UPSTREAM_TRAILER = "Upstream";
 // The rebase onto the first stable release that carries pull N drops the commit, and Tim is told
 // once, with the commit message's own words on what takes its place.
 const SUPERSEDED_TRAILER = "Superseded-by";
-// The daemon files the fork patches: a chat on a custom provider (zero retention) has its
-// workspace named and its commit text written on that provider only. Their tests run in the gate.
-const DAEMON_PATCH_FILES = [
-  "packages/protocol/src/messages.ts",
-  "packages/server/src/server/agent/create-agent/create.ts",
-  "packages/server/src/server/agent/structured-generation-providers.ts",
-  "packages/server/src/server/agent/tools/paseo-tools.ts",
-  "packages/server/src/server/schedule/service.ts",
-  "packages/server/src/server/session.ts",
-  "packages/server/src/server/session/checkout/git-metadata-generator.ts",
-  "packages/server/src/server/worktree-branch-name-generator.ts",
-];
-const DAEMON_PATCH_TESTS = [
-  "src/server/agent/create-agent/create.test.ts",
-  "src/server/agent/mcp-server.test.ts",
-  "src/server/agent/structured-generation-providers.test.ts",
-  "src/server/session/checkout/git-metadata-generator.test.ts",
-  "src/server/schedule/service.test.ts",
-  "src/server/session.test.ts",
-  "src/server/session.workspaces.test.ts",
-  "src/server/worktree-branch-name-generator.test.ts",
-];
-// A fork release changes the app, the build config, the packaged-app smoke's deadline and the
-// daemon patch's files only. The rest of the daemon, the CLI and every other package stay
-// upstream's source of the same tag, lockfile included.
+// A fork release changes the app, the build config and the packaged-app smoke's deadline only.
+// The daemon, the CLI and every other package stay upstream's source of the same tag, lockfile
+// included.
 const ALLOWED_PATHS = [
   /^packages\/app\//,
   /^packages\/desktop\/electron-builder\.yml$/,
   /^packages\/desktop\/e2e\/packaged-app-smoke\.js$/,
   /^fork\//,
 ];
-const DAEMON_PATCH_PATHS = new Set([
-  ...DAEMON_PATCH_FILES,
-  ...DAEMON_PATCH_TESTS.map((file) => `packages/server/${file}`),
-]);
 const LABEL = "com.alma.paseo-fork-release";
 // The build Mac runs electron-builder with this hook, which writes the signing plan sincoder
 // signs from (sign-mac.cjs), so the app accepts upstream's signature too.
@@ -182,9 +156,7 @@ export function nextForkNumber(upstreamTag, releaseTags) {
 }
 
 export function pathsOutsideScope(paths) {
-  return paths.filter(
-    (file) => !DAEMON_PATCH_PATHS.has(file) && !ALLOWED_PATHS.some((pattern) => pattern.test(file)),
-  );
+  return paths.filter((file) => !ALLOWED_PATHS.some((pattern) => pattern.test(file)));
 }
 
 export function featureSubjects(subjects) {
@@ -639,7 +611,7 @@ function runSteps(steps, { runDir, env }) {
   }
 }
 
-function gate({ runDir, env, specs, daemonPatched }) {
+function gate({ runDir, env, specs }) {
   const steps = [
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
     ["playwright", "npx", ["playwright", "install", "chromium"]],
@@ -651,14 +623,6 @@ function gate({ runDir, env, specs, daemonPatched }) {
     ["app-deps", "npm", ["run", "build:app-deps"]],
     ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app"]],
   ];
-  // Once a rebase drops the daemon patch (Superseded-by), its files are upstream's own again.
-  if (daemonPatched) {
-    steps.push([
-      "daemon-patch-unit",
-      "npm",
-      ["run", "test:unit", "--workspace=@getpaseo/server", "--", ...DAEMON_PATCH_TESTS],
-    ]);
-  }
   steps.push([
     "two-way-audio",
     "npm",
@@ -697,22 +661,16 @@ export function branchSpecs(tag, { runDir, cwd } = {}) {
   return specs;
 }
 
-/** Whether the branch still carries the daemon patch, from the files it changes. */
-export function patchesDaemon(paths) {
-  return paths.some((file) => DAEMON_PATCH_FILES.includes(file));
-}
-
-/** The files the branch changes on `tag`, which have to be the fork's to change. */
+/** Fails when the branch changes a file on `tag` that is not the fork's to change. */
 function checkScope(tag, runDir) {
   const changed = git(["diff", "--name-only", tag, "HEAD"], { runDir }).split("\n").filter(Boolean);
   const outside = pathsOutsideScope(changed);
   if (outside.length > 0) {
     throw new StepFailure(
       "scope",
-      `the branch changes files outside the app and the daemon patch: ${outside.join(", ")}`,
+      `the branch changes files outside the app and the build config: ${outside.join(", ")}`,
     );
   }
-  return changed;
 }
 
 /** electron-builder's update feed: `owner`'s releases on the stock `latest` channel. */
@@ -1571,11 +1529,8 @@ function work({ ctx, options, plan, runDir }) {
     // The rebase dropped every feature commit as already upstream: the same as a merged pull.
     return retire({ ctx, options, runDir, reason: `no feature commit left on ${ctx.latestTag}` });
   }
-  const changed = checkScope(ctx.latestTag, runDir);
-  const checks = {
-    specs: branchSpecs(ctx.latestTag, { runDir }),
-    daemonPatched: patchesDaemon(changed),
-  };
+  checkScope(ctx.latestTag, runDir);
+  const checks = { specs: branchSpecs(ctx.latestTag, { runDir }) };
   release({ ctx, options, runDir, features, checks });
   return "published";
 }
