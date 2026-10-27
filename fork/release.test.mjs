@@ -23,7 +23,6 @@ import {
   notaryOutside,
   OUTSIDE_STEPS,
   parseStableTag,
-  patchesDaemon,
   pathsOutsideScope,
   queueNotice,
   releaseFileNames,
@@ -80,15 +79,14 @@ test("the fork's own commits are told apart from its features", () => {
   );
 });
 
-test("a fork release changes the app, the build config, the smoke deadline and the daemon patch only", () => {
+test("a fork release changes the app, the build config and the smoke deadline only", () => {
   assert.deepEqual(
     pathsOutsideScope([
       "packages/app/src/panels/agent-panel.tsx",
       "packages/desktop/electron-builder.yml",
       "packages/desktop/e2e/packaged-app-smoke.js",
       "fork/release.mjs",
-      "packages/server/src/server/agent/structured-generation-providers.ts",
-      "packages/server/src/server/session.workspaces.test.ts",
+      "packages/server/src/server/session.ts",
       "packages/protocol/src/messages.ts",
       "packages/server/src/server/index.ts",
       "packages/server/src/server/session.test.ts",
@@ -98,7 +96,10 @@ test("a fork release changes the app, the build config, the smoke deadline and t
       "package-lock.json",
     ]),
     [
+      "packages/server/src/server/session.ts",
+      "packages/protocol/src/messages.ts",
       "packages/server/src/server/index.ts",
+      "packages/server/src/server/session.test.ts",
       "packages/server/src/server/agent/agent-manager.test.ts",
       "packages/desktop/src/main.ts",
       "packages/desktop/e2e/browser-tabs.e2e.mjs",
@@ -164,9 +165,9 @@ test("a branch that changes the app with no browser spec fails, one that leaves 
   write(`${BROWSER}/added.real.spec.ts`, "a spec that needs a real provider\n");
   commit("feat(app): a feature");
   assert.throws(() => branchSpecs("v0.11.4", { cwd: repo }), /adds or changes no browser spec/);
-  git("checkout", "-q", "-b", "daemon", "v0.11.4");
-  write("packages/server/src/server/session.ts", "the daemon patch\n");
-  commit("fix(server): the daemon patch");
+  git("checkout", "-q", "-b", "server", "v0.11.4");
+  write("packages/server/src/server/session.ts", "a server change\n");
+  commit("fix(server): a server change");
   assert.deepEqual(branchSpecs("v0.11.4", { cwd: repo }), []);
 });
 
@@ -395,18 +396,6 @@ test("a rebase onto a newer tag leaves out a superseded commit through the job's
     .stdout.trim()
     .split("\n");
   assert.deepEqual(subjects, ["fork: the job", "feat(app): quote"]);
-});
-
-test("the daemon patch's tests run while the branch changes one of its files", () => {
-  assert.equal(
-    patchesDaemon(["packages/app/src/quote.tsx", "packages/server/src/server/session.ts"]),
-    true,
-  );
-  // its tests alone, or the app alone, are not the patch
-  assert.equal(
-    patchesDaemon(["packages/server/src/server/session.test.ts", "fork/release.mjs"]),
-    false,
-  );
 });
 
 test("a release folder names every file the updater needs and the version in its manifest", () => {
