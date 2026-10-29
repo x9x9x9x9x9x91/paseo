@@ -17,10 +17,13 @@ import {
   featureSubjects,
   forkOnlySubjects,
   forkVersion,
+  holdForNotary,
   liveIsOpen,
   nextForkNumber,
   nodeMajorFromWorkflow,
   notaryOutside,
+  notaryRefusal,
+  notaryRefused,
   OUTSIDE_STEPS,
   parseStableTag,
   pathsOutsideScope,
@@ -282,6 +285,137 @@ test("a notarize Apple answered Invalid is the app's, one the notary never finis
   assert.equal(notaryOutside("id: 1\n  status: In Progress\nTimeout of 1h reached"), true);
   assert.equal(notaryOutside("Error: HTTP status code: 503"), true);
   assert.equal(notaryOutside(""), true);
+});
+
+const REFUSED_401 =
+  "Conducting pre-submission checks for notarize.zip and initiating connection to the Apple notary service...\nError: HTTP status code: 401. Invalid credentials. Username or password is incorrect. Use the app-specific password generated at appleid.apple.com. Ensure that all authentication arguments are correct.";
+
+test("a notary that refuses the profile's sign-in is Tim's step, never the notary down", () => {
+  assert.equal(notaryRefused(REFUSED_401), true);
+  assert.equal(
+    notaryRefused("Error: HTTP status code: 403. A required agreement is missing"),
+    true,
+  );
+  assert.equal(notaryRefused("Error: HTTP status code: 503"), false);
+  assert.equal(notaryRefused("Error: HTTP status code: 4011"), false);
+  assert.equal(notaryRefused(""), false);
+  // so a 401 at notarize counts at once instead of a day of rebuilds
+  assert.equal(notaryOutside(REFUSED_401), false);
+  assert.equal(notaryOutside("Error: HTTP status code: 403. Forbidden"), false);
+});
+
+test("the notary is asked before the build with the job's profile; only a refusal holds the run", () => {
+  const calls = [];
+  const fake =
+    (status, stdout, stderr = "") =>
+    (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return { status, stdout, stderr };
+    };
+  assert.equal(notaryRefusal(fake(1, "", REFUSED_401)), REFUSED_401);
+  assert.deepEqual(calls[0], [
+    "/usr/bin/xcrun",
+    "notarytool",
+    "history",
+    "--keychain-profile",
+    "substrate-notary",
+  ]);
+  assert.equal(notaryRefusal(fake(0, "Successfully received submission history.")), null);
+  // Apple down or no answer: the build goes ahead and its notarize step retries
+  assert.equal(notaryRefusal(fake(1, "", "Error: HTTP status code: 503")), null);
+  assert.equal(notaryRefusal(fake(null, "", "")), null);
+  // a 401 in the history's own text with a zero exit is no refusal
+  assert.equal(notaryRefusal(fake(0, "name: HTTP status code: 401")), null);
+});
+
+test("a refused profile holds the candidate uncounted and turns its note over to Tim once", () => {
+  const candidate = "v0.14.0@51c93a2d9";
+  const ctx = { latestTag: "v0.14.0", candidate };
+  const state = {
+    lastPublished: { version: "0.13.2-fork.3", upstreamTag: "v0.13.2" },
+    failure: {
+      candidate,
+      attempts: 1,
+      outsideSince: "2026-10-29T11:26:59.423Z",
+      at: "2026-10-29T12:40:37.275Z",
+      step: "notarize",
+    },
+    openNotes: ["v0.14.0"],
+  };
+  const first = holdForNotary(state, { ctx, refused: REFUSED_401, at: "2026-10-29T13:40:00.000Z" });
+  assert.equal(first.lastCheckAt, "2026-10-29T13:40:00.000Z");
+  assert.equal(first.latestUpstream, "v0.14.0");
+  // nothing counted, and the hours of the hold end the run of outside failures
+  assert.deepEqual(first.failure, {
+    candidate,
+    attempts: 1,
+    step: "notary",
+    at: "2026-10-29T13:40:00.000Z",
+  });
+  assert.deepEqual(first.openNotes, ["v0.14.0"]);
+  assert.equal(first.pendingNotices.length, 1);
+  const [note] = first.pendingNotices;
+  assert.equal(note.key, "release v0dot14dot0");
+  assert.equal(note.standing, true);
+  assert.equal(note.ask, undefined);
+  assert.equal(deliverArgs(note).includes("--needs"), false);
+  assert.match(note.body, /xcrun notarytool store-credentials substrate-notary/);
+  assert.match(note.body, /stays on 0\.13\.2-fork\.3/);
+  assert.match(note.body, /HTTP status code: 401/);
+
+  // the next hours leave the note his: no notice, only the check's time
+  const delivered = { ...first };
+  delete delivered.pendingNotices;
+  const later = holdForNotary(delivered, {
+    ctx,
+    refused: REFUSED_401,
+    at: "2026-10-29T14:40:00.000Z",
+  });
+  assert.equal(later.pendingNotices, undefined);
+  assert.equal(later.failure.at, "2026-10-29T14:40:00.000Z");
+  assert.equal(later.failure.attempts, 1);
+
+  // a new candidate starts its own hold, and an older release's note is settled
+  const next = { latestTag: "v0.14.1", candidate: "v0.14.1@abc" };
+  const fresh = holdForNotary(delivered, {
+    ctx: next,
+    refused: REFUSED_401,
+    at: "2026-10-30T09:00:00.000Z",
+  });
+  assert.deepEqual(fresh.failure, {
+    candidate: "v0.14.1@abc",
+    attempts: 0,
+    step: "notary",
+    at: "2026-10-30T09:00:00.000Z",
+  });
+  assert.deepEqual(
+    fresh.pendingNotices.map((notice) => [notice.key, notice.level]),
+    [
+      ["release v0dot14dot0", "info"],
+      ["release v0dot14dot1", "warn"],
+    ],
+  );
+  assert.deepEqual(fresh.openNotes, ["v0.14.1"]);
+  // the state it started from is left as it was
+  assert.equal(state.failure.step, "notarize");
+});
+
+test("a 403 from the notary sends Tim to the developer agreement, not a new password", () => {
+  const refused =
+    "Error: HTTP status code: 403. A required agreement is missing or has expired. This request requires an in-effect agreement that has not been signed or has expired.";
+  const held = holdForNotary(
+    {},
+    {
+      ctx: { latestTag: "v0.14.0", candidate: "v0.14.0@abc" },
+      refused,
+      at: "2026-10-29T13:40:00.000Z",
+    },
+  );
+  const [note] = held.pendingNotices;
+  assert.match(note.body, /developer\.apple\.com, Account, and accept the agreement/);
+  assert.doesNotMatch(note.body, /store-credentials/);
+  assert.match(note.body, /stays on no fork release yet/);
+  assert.match(note.body, /A required agreement is missing/);
 });
 
 test("the Node major comes from upstream's release workflow", () => {
@@ -546,6 +680,22 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
   );
   // The night run groups asks by their line: a candidate's first and last notice are one subject.
   assert.equal(last.ask, first.ask);
+  // A refusal at notarize itself is Tim's step, never a fix on the branch.
+  const refused = notice(
+    "failed",
+    {
+      step: "notarize",
+      message:
+        "Apple did not accept the app (exit 1):\nError: HTTP status code: 401. Invalid credentials.",
+    },
+    1,
+    "2026-10-26T12-00-00.000Z",
+  );
+  assert.match(refused.ask, /^Find why Apple's notary refused substrate-notary at notarize/);
+  assert.match(
+    refused.ask,
+    /is Tim's step .* needs no fix on fork\/release, so name it as his step$/,
+  );
   assert.match(
     first.body,
     /Run log: \/x\/paseo-release\/runs\/2026-10-26T09-32-38\.733Z on sincoder/,

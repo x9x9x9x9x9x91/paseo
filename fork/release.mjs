@@ -97,10 +97,13 @@ const MAX_ATTEMPTS = 3;
 // notary. Their failure is most often the service's or the network's, which no commit on the
 // branch fixes, so it counts toward MAX_ATTEMPTS only once OUTSIDE_GRACE_MS have passed since the
 // first of the failed runs running at these steps: a day of GitHub or the notary down is retried
-// every hour, and a fault that lasts (an expired notary profile, a token that may not upload a
-// release) still stops the hourly rebuilds.
+// every hour, and a fault that lasts (a token that may not upload a release) still stops the
+// hourly rebuilds. The notary refusing the profile is no outage: notaryRefused.
 export const OUTSIDE_STEPS = new Set(["github", "push", "publish", "notarize"]);
 const OUTSIDE_GRACE_MS = 24 * 60 * 60_000;
+// Apple's notary refusing the profile's sign-in, which only a new app-specific password heals
+// (ALM-4009); notarytool prints it before it uploads anything.
+const NOTARY_REFUSED = /HTTP status code: 40[13]\b/;
 // The features' browser specs are the ones the branch adds or changes against upstream's tag,
 // read from the branch each run, so no rebase or hand edit can leave a feature's spec out of
 // the gate. A `.real.spec.ts` needs a real provider and is not in the browser project.
@@ -235,10 +238,62 @@ export function liveIsOpen(spawn = spawnSync) {
 
 /**
  * Whether a notarize that was not accepted is the notary's (down, still in progress at the
- * timeout) rather than the app's: Apple's answer that the app is Invalid is the signing's fault.
+ * timeout) rather than the app's: Apple's answer that the app is Invalid is the signing's fault,
+ * and a refused sign-in (notaryRefused) lasts until Tim's step, so neither waits out the grace.
  */
 export function notaryOutside(output) {
-  return !/status: (Invalid|Rejected)/.test(output);
+  return !notaryRefused(output) && !/status: (Invalid|Rejected)/.test(output);
+}
+
+/** Whether notarytool's output is Apple refusing the profile's sign-in (401 or 403). */
+export function notaryRefused(output) {
+  return NOTARY_REFUSED.test(output);
+}
+
+/**
+ * Apple's answer when it refuses the job's notary profile, asked before the build host with
+ * `notarytool history`, which signs in as notarize does in about a second; null when it lets the
+ * job in, or when it is down or does not answer, which the notarize step itself retries
+ * (ALM-4009).
+ */
+export function notaryRefusal(spawn = spawnSync) {
+  const result = spawn(
+    "/usr/bin/xcrun",
+    ["notarytool", "history", "--keychain-profile", NOTARY_PROFILE],
+    { encoding: "utf8", timeout: 2 * 60_000 },
+  );
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
+  return result.status !== 0 && notaryRefused(output) ? output : null;
+}
+
+/**
+ * The state a run leaves when the notary refused the profile before the build: checked, nothing
+ * built or counted, the candidate's attempts kept and its run of outside failures ended, as the
+ * hours of the hold were none. The release's note becomes Tim's step the first hour of a hold
+ * for the candidate, a note with no ask, as no agent can take his step; the later hours leave
+ * it his (ALM-4009).
+ */
+export function holdForNotary(state, { ctx, refused, at }) {
+  const previous = state.failure?.candidate === ctx.candidate ? state.failure : null;
+  const failure = { ...previous, candidate: ctx.candidate, attempts: previous?.attempts ?? 0 };
+  delete failure.outsideSince;
+  const fresh = previous?.step !== "notary";
+  failure.step = "notary";
+  failure.at = at;
+  const next = { ...state, lastCheckAt: at, latestUpstream: ctx.latestTag, failure };
+  if (fresh) {
+    const app = state.lastPublished?.version ?? "no fork release yet";
+    // A 401 is the password; a 403 most often an Apple Developer agreement waiting for him.
+    const step = /HTTP status code: 403\b/.test(refused)
+      ? `sign in at developer.apple.com, Account, and accept the agreement it shows (Apple's answer below names what is missing); the stored password stays as it is`
+      : `make a new app-specific password at appleid.apple.com (Sign-In and Security, App-Specific Passwords), then in Terminal on sincoder run \`xcrun notarytool store-credentials ${NOTARY_PROFILE}\` and paste it at its hidden prompt, with the same Apple ID and team as before`;
+    const failed = {
+      title: `Paseo fork release waits on you: Apple's notary refuses ${NOTARY_PROFILE} (upstream ${ctx.latestTag})`,
+      body: `Apple's notary refuses the stored notary profile ${NOTARY_PROFILE}, so the job builds nothing for upstream ${ctx.latestTag}: each hour it asks the notary again, and the first hour it is let in builds and publishes. The app stays on ${app}.\n\nYour step: ${step}.\n\nApple's answer:\n\n${refused}\n`,
+    };
+    settleNotes(next, releaseNotices({ ctx, open: state.openNotes, failed }));
+  }
+  return next;
 }
 
 /** A candidate is retried until MAX_ATTEMPTS of its failed runs have counted. */
@@ -321,6 +376,14 @@ class StepFailure extends Error {
 
 /** No build host answered, or the one in use went away or stayed busy: try again next hour. */
 class HostAway extends Error {}
+
+/** Apple's notary refused the profile before the build (notaryRefusal): a hold, never a count. */
+class NotaryRefused extends StepFailure {
+  constructor(refused) {
+    super("notary", `Apple's notary refuses ${NOTARY_PROFILE}:\n${refused}`, null, false);
+    this.refused = refused;
+  }
+}
 
 function parseArgs(argv) {
   const options = { dryRun: false, branch: RELEASE_BRANCH, force: false, retire: false };
@@ -1405,6 +1468,9 @@ function release({ ctx, options, runDir, features, checks = null, handover = fal
   const tags = forkReleases(runDir).map((entry) => entry.tag);
   ctx.version = forkVersion(ctx.latestTag, nextForkNumber(ctx.latestTag, tags));
   const owner = (handover ? UPSTREAM_REPO : FORK_REPO).split("/")[0];
+  // Every build ends at notarize, so a refused profile stops it before the build host.
+  const refused = notaryRefusal();
+  if (refused) throw new NotaryRefused(refused);
   ctx.host = pickBuildHost(runDir);
   log(`  building ${ctx.version}${handover ? `, updating from ${owner}` : ""} on ${ctx.host}`);
   const version = ctx.version;
@@ -1570,10 +1636,14 @@ export function failureNotice({
   const step = error.step ?? "job";
   // A retirement held by a fork-only feature is a hand step, no bug: commits leave the
   // published branch, which is Tim's word (README, Retirement). A step outside the branch
-  // (OUTSIDE_STEPS) is retried by the job itself, so its ask says a service's fault needs nothing.
+  // (OUTSIDE_STEPS) is retried by the job itself, so its ask says a service's fault needs nothing;
+  // the notary refusing the profile is Tim's step (notaryRefused).
   let ask = `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`;
   if (step === "retire") {
     ask = `Find which merged features' commits leave ${RELEASE_BRANCH} and which pulls leave UPSTREAM_PULLS for upstream ${ctx.latestTag} with branch ${head} ${from}, by fork/README.md's Retirement; taking commits off the published branch is Tim's word`;
+  } else if (step === "notarize" && notaryRefused(error.message ?? "")) {
+    // Refused after the check before the build let the run in: the next run's check holds it.
+    ask = `Find why Apple's notary refused ${NOTARY_PROFILE} at notarize for upstream ${ctx.latestTag} with branch ${head} ${from}; a refused sign-in is Tim's step (a new app-specific password for a 401, the developer agreement for a 403) and needs no fix on ${RELEASE_BRANCH}, so name it as his step`;
   } else if (error.outside) {
     ask = `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}; GitHub or Apple's notary down needs no fix, since the job runs the step again every hour, and anything else is fixed on ${RELEASE_BRANCH} or named as Tim's step`;
   }
@@ -1683,6 +1753,9 @@ function settle({ outcome, error, ctx, state, runDir }) {
       body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add. Its release job on sincoder published one last release, ${ctx.version}: upstream's ${ctx.latestTag}, signed by the fork so your app accepts it, and updating from upstream's releases. Your app installs it at its next update, then stock Paseo ${ctx.latestTag} at the one after, with nothing to do on your side; the daemon and your chats keep running. The job has stopped.\n\nLast release: ${handover}\n`,
     });
     log(`retired on ${ctx.latestTag} with ${ctx.version}`);
+  } else if (error instanceof NotaryRefused) {
+    Object.assign(next, holdForNotary(state, { ctx, refused: error.refused, at: stamp }));
+    log(`held: Apple's notary refuses ${NOTARY_PROFILE}, so ${ctx.candidate} waits on Tim's step`);
   } else {
     const { failure, counted } = countFailure(state.failure, {
       candidate: ctx.candidate,
