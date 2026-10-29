@@ -357,8 +357,17 @@ test("a refused profile holds the candidate uncounted and turns its note over to
   const [note] = first.pendingNotices;
   assert.equal(note.key, "release v0dot14dot0");
   assert.equal(note.standing, true);
-  assert.equal(note.ask, undefined);
-  assert.equal(deliverArgs(note).includes("--needs"), false);
+  assert.equal(note.needs, "tim");
+  assert.equal(
+    note.ask,
+    "Store a new app-specific password as substrate-notary on sincoder, so Apple's notary lets it in and the Paseo fork builds upstream v0.14.0",
+  );
+  const args = deliverArgs(note);
+  assert.deepEqual(args.slice(args.indexOf("--needs"), args.indexOf("--needs") + 3), [
+    "--needs",
+    "tim",
+    "--ask",
+  ]);
   assert.match(note.body, /xcrun notarytool store-credentials substrate-notary/);
   assert.match(note.body, /stays on 0\.13\.2-fork\.3/);
   assert.match(note.body, /HTTP status code: 401/);
@@ -414,6 +423,8 @@ test("a 403 from the notary sends Tim to the developer agreement, not a new pass
   const [note] = held.pendingNotices;
   assert.match(note.body, /developer\.apple\.com, Account, and accept the agreement/);
   assert.doesNotMatch(note.body, /store-credentials/);
+  assert.equal(note.needs, "tim");
+  assert.match(note.ask, /^Accept the Apple Developer agreement at developer\.apple\.com/);
   assert.match(note.body, /stays on no fork release yet/);
   assert.match(note.body, /A required agreement is missing/);
 });
@@ -762,6 +773,12 @@ test("a notice with an ask goes to the door as an agent's ask, one without as a 
     "--key",
     "conflict resolved abc",
   ]);
+  // Who a notice needs goes to the door as given, with an ask or without one (ALM-4030).
+  const his = deliverArgs({ level: "warn", title: "held", key: "k", needs: "tim", ask });
+  assert.deepEqual(his.slice(-4), ["--needs", "tim", "--ask", ask]);
+  const bare = deliverArgs({ level: "warn", title: "held", key: "k", needs: "tim" });
+  assert.deepEqual(bare.slice(-2), ["--needs", "tim"]);
+  assert.equal(bare.includes("--ask"), false);
 });
 
 test("a standing notice asks the door for the one note its key names, whatever the day", () => {

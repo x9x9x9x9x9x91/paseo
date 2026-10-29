@@ -270,8 +270,8 @@ export function notaryRefusal(spawn = spawnSync) {
  * The state a run leaves when the notary refused the profile before the build: checked, nothing
  * built or counted, the candidate's attempts kept and its run of outside failures ended, as the
  * hours of the hold were none. The release's note becomes Tim's step the first hour of a hold
- * for the candidate, a note with no ask, as no agent can take his step; the later hours leave
- * it his (ALM-4009).
+ * for the candidate, an ask that needs him, never an agent, as no agent can take his step; the
+ * later hours leave it his (ALM-4009, ALM-4030).
  */
 export function holdForNotary(state, { ctx, refused, at }) {
   const previous = state.failure?.candidate === ctx.candidate ? state.failure : null;
@@ -284,10 +284,15 @@ export function holdForNotary(state, { ctx, refused, at }) {
   if (fresh) {
     const app = state.lastPublished?.version ?? "no fork release yet";
     // A 401 is the password; a 403 most often an Apple Developer agreement waiting for him.
-    const step = /HTTP status code: 403\b/.test(refused)
+    const agreement = /HTTP status code: 403\b/.test(refused);
+    const step = agreement
       ? `sign in at developer.apple.com, Account, and accept the agreement it shows (Apple's answer below names what is missing); the stored password stays as it is`
       : `make a new app-specific password at appleid.apple.com (Sign-In and Security, App-Specific Passwords), then in Terminal on sincoder run \`xcrun notarytool store-credentials ${NOTARY_PROFILE}\` and paste it at its hidden prompt, with the same Apple ID and team as before`;
     const failed = {
+      needs: "tim",
+      ask: agreement
+        ? `Accept the Apple Developer agreement at developer.apple.com, so Apple's notary lets ${NOTARY_PROFILE} in and the Paseo fork builds upstream ${ctx.latestTag}`
+        : `Store a new app-specific password as ${NOTARY_PROFILE} on sincoder, so Apple's notary lets it in and the Paseo fork builds upstream ${ctx.latestTag}`,
       title: `Paseo fork release waits on you: Apple's notary refuses ${NOTARY_PROFILE} (upstream ${ctx.latestTag})`,
       body: `Apple's notary refuses the stored notary profile ${NOTARY_PROFILE}, so the job builds nothing for upstream ${ctx.latestTag}: each hour it asks the notary again, and the first hour it is let in builds and publishes. The app stays on ${app}.\n\nYour step: ${step}.\n\nApple's answer:\n\n${refused}\n`,
     };
@@ -1287,11 +1292,19 @@ function shellQuote(value) {
 
 /**
  * The door's words for a notice. One with an `ask` comes as an agent's ask, which Alma's night
- * run (agent-asks) takes by fork/README.md and turns into a row a lane builds; the rest are notes
- * for Tim to read. A standing one is the one note its key names whatever the day, rewritten by
- * each delivery.
+ * run (agent-asks) takes by fork/README.md and turns into a row a lane builds; one with `needs`
+ * goes as that, so Tim's step (holdForNotary) is his and no agent's (ALM-4030); the rest are
+ * notes for Tim to read. A standing one is the one note its key names whatever the day,
+ * rewritten by each delivery.
  */
-export function deliverArgs({ level, title, key, ask, standing }) {
+export function deliverArgs({
+  level,
+  title,
+  key,
+  ask,
+  needs = ask ? "agent" : undefined,
+  standing,
+}) {
   return [
     "deliver",
     "--source",
@@ -1303,7 +1316,8 @@ export function deliverArgs({ level, title, key, ask, standing }) {
     "--key",
     key,
     ...(standing ? ["--standing"] : []),
-    ...(ask ? ["--needs", "agent", "--ask", ask] : []),
+    ...(needs ? ["--needs", needs] : []),
+    ...(ask ? ["--ask", ask] : []),
   ];
 }
 
@@ -1689,8 +1703,9 @@ export function releaseNotices({ ctx, open = [], failed, runDir }) {
         : `Upstream ${built} came out before a fork release of ${tag} passed its checks, so the job built ${built} instead, and ${ctx.version} is out.\n`,
     }));
   if (failed) {
-    const { title, body, ask } = failed;
-    notices.push({ level: "warn", standing: true, key: releaseKey(built), title, body, ask });
+    const { title, body, ask, needs } = failed;
+    const notice = { level: "warn", standing: true, key: releaseKey(built), title, body, ask };
+    notices.push(needs ? { ...notice, needs } : notice);
     return { notices, open: [built] };
   }
   if (open.includes(built) || ctx.resolvedBy) {
