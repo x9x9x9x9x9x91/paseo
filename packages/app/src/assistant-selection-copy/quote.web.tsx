@@ -217,7 +217,7 @@ function QuoteButton({
       surfaceRef={setSurface}
       testID="assistant-selection-quote"
     >
-      <Button variant="ghost" size="xs" leftIcon={TextQuote} onPress={onPress}>
+      <Button variant="ghost" size="sm" leftIcon={TextQuote} onPress={onPress}>
         {t("agentStream.quote.action")}
       </Button>
     </AnchoredSurface>
