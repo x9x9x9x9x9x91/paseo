@@ -73,7 +73,8 @@ const PROXY_URL = process.env.PASEO_FORK_PROXY_URL ?? "http://127.0.0.1:8318";
 const AGENT_MODEL = "claude-opus-5-5";
 // The test Macs the checks and the build run on, the first that answers. Each takes the run
 // under its Max lock (Night's ns-with-max-lock), so a Night Max leg never runs beside a build.
-export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "mini1 mini2 mini3")
+// Never mini1: it is the machine room, where nothing builds or tests (ALM-4328).
+export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "mini2 mini3")
   .split(/[\s,]+/)
   .filter(Boolean);
 // The job's folder on a build host, relative to its home, as ROOT is on sincoder.
