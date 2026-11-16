@@ -35,6 +35,7 @@ import {
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
+  stageResolved,
   supersededBy,
   withoutTrailers,
 } from "./release.mjs";
@@ -541,6 +542,64 @@ test("a rebase onto a newer tag leaves out a superseded commit through the job's
     .stdout.trim()
     .split("\n");
   assert.deepEqual(subjects, ["fork: the job", "feat(app): quote"]);
+});
+
+test("a conflict the agent resolved stages what it left and reaches rebase --continue", (t) => {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  const lib = "packages/app/src/lib";
+  const [gone, unstaged, restaged, removed] = ["gone.test.tsx", "b.ts", "c.ts", "d.ts"].map(
+    (name) => `${lib}/${name}`,
+  );
+  for (const file of [gone, unstaged, restaged, removed]) write(file, "upstream's\n");
+  commit("upstream's files");
+  git("tag", "v0.11.4a");
+  git("checkout", "-q", "-b", "fork");
+  for (const file of [gone, unstaged, restaged, removed]) write(file, "the fork's\n");
+  commit("feat(app): the fork's change");
+  git("checkout", "-q", "-b", "upstream", "v0.11.4a");
+  git("rm", "-q", gone, removed);
+  write(unstaged, "upstream's next\n");
+  write(restaged, "upstream's next\n");
+  commit("upstream's next release");
+  git("tag", "v0.11.5");
+  git("checkout", "-q", "fork");
+  const env = {
+    ...process.env,
+    GIT_EDITOR: "true",
+    GIT_COMMITTER_NAME: "fork",
+    GIT_COMMITTER_EMAIL: "fork@example.invalid",
+  };
+  const rebase = spawnSync(
+    "git",
+    ["-c", "core.hooksPath=/dev/null", "rebase", "--onto", "v0.11.5", "v0.11.4a"],
+    { cwd: repo, encoding: "utf8", env },
+  );
+  assert.notEqual(rebase.status, 0, "the rebase stops on the conflicts");
+  // As the agent leaves them: a modify/delete it deleted and staged, a file resolved but not
+  // staged, one staged and edited again, and a modify/delete deleted on disk only.
+  git("rm", "-q", gone);
+  write(unstaged, "resolved\n");
+  write(restaged, "resolved once\n");
+  git("add", restaged);
+  write(restaged, "resolved again\n");
+  rmSync(path.join(repo, removed));
+  assert.deepEqual(stageResolved([gone, unstaged, restaged, removed], { cwd: repo }), [
+    unstaged,
+    restaged,
+    removed,
+  ]);
+  const proceed = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "rebase", "--continue"], {
+    cwd: repo,
+    encoding: "utf8",
+    env,
+  });
+  assert.equal(proceed.status, 0, proceed.stderr);
+  const show = (file) =>
+    spawnSync("git", ["show", `HEAD:${file}`], { cwd: repo, encoding: "utf8" });
+  assert.notEqual(show(gone).status, 0);
+  assert.notEqual(show(removed).status, 0);
+  assert.equal(show(unstaged).stdout, "resolved\n");
+  assert.equal(show(restaged).stdout, "resolved again\n");
 });
 
 test("a release folder names every file the updater needs and the version in its manifest", () => {
