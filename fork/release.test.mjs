@@ -11,6 +11,7 @@ import {
   closedPulls,
   CONFLICT_AGENT_TOOLS,
   compareStableTags,
+  conflictAgentArgs,
   conflictPrompt,
   countFailure,
   decide,
@@ -610,12 +611,16 @@ test("the conflict agent may git rm a file upstream deleted, and its prompt says
   assert.ok(tools.includes("Bash(git rm:*)"));
   assert.ok(tools.includes("Bash(git add:*)"));
   assert.ok(!tools.some((tool) => /git (commit|rebase|reset|checkout)/.test(tool)));
-  const prompt = conflictPrompt({
+  const stop = {
     commit: "6827d2572",
     oldBase: "v0.15.0",
     newBase: "v0.16.0",
     files: ["packages/app/src/lib/overlay-root.test.tsx"],
-  });
+  };
+  const prompt = conflictPrompt(stop);
+  const args = conflictAgentArgs(stop);
+  assert.equal(args[args.indexOf("--allowedTools") + 1], CONFLICT_AGENT_TOOLS);
+  assert.equal(args[args.indexOf("-p") + 1], prompt);
   assert.match(prompt, /- packages\/app\/src\/lib\/overlay-root\.test\.tsx/);
   assert.match(prompt, /upstream deleted is resolved with git rm <file> \(never --cached/);
 });
