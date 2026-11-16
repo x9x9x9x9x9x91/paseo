@@ -1403,7 +1403,7 @@ export function conflictPrompt({ commit, oldBase, newBase, files }) {
 The fork's release branch is upstream's stable tag plus a few commits of its own. They are being replayed from ${oldBase} onto upstream's new stable tag ${newBase}, and commit ${commit} stopped on conflicts in:
 ${files.map((file) => `- ${file}`).join("\n")}
 
-Read the commit (git show REBASE_HEAD), what upstream changed in those files (git log -p ${oldBase}..${newBase} -- <file>), and the conflicted files. Resolve every conflict so the commit does what it did before, written against upstream's new code. Keep upstream's changes; adapt the commit, not upstream. Remove every conflict marker and git add each resolved file. A conflicted file upstream deleted is resolved with git rm, the commit's change to it carried to where upstream's code now lives.
+Read the commit (git show REBASE_HEAD), what upstream changed in those files (git log -p ${oldBase}..${newBase} -- <file>), and the conflicted files. Resolve every conflict so the commit does what it did before, written against upstream's new code. Keep upstream's changes; adapt the commit, not upstream. Remove every conflict marker and git add each resolved file. A conflicted file upstream deleted is resolved with git rm <file> (never --cached, which leaves it on disk to be staged again), the commit's change to it carried to where upstream's code now lives.
 
 Do not commit, do not run git rebase, do not install packages, build or run tests, and do not edit other files unless the commit needs it. The job runs typecheck, lint and the tests after you.
 
