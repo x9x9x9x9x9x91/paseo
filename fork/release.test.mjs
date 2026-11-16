@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   branchSpecs,
+  buildArgs,
   checkoutCandidate,
   closedPulls,
   CONFLICT_AGENT_TOOLS,
@@ -679,6 +680,24 @@ test("a release folder names every file the updater needs and the version in its
     releaseFilesProblem("0.12.0-fork.2", names, "version: 0.12.0-fork.1\n"),
     /does not name version 0.12.0-fork.2/,
   );
+});
+
+test("the build hands electron-builder the signing hook and the ad-hoc identity", () => {
+  // electron-builder 26.18.0 calls mac.sign only once it has an identity; the build host has none.
+  const args = buildArgs("someone");
+  const config = args.filter((arg) => arg.startsWith("-c.mac."));
+  assert.deepEqual(config, [
+    `-c.mac.sign=${path.join(path.dirname(fileURLToPath(import.meta.url)), "sign-mac.cjs")}`,
+    "-c.mac.identity=-",
+    "-c.mac.notarize=false",
+  ]);
+  assert.deepEqual(args.slice(0, 3), ["run", "build:desktop", "--"]);
+  assert.ok(args.includes("-c.publish.owner=someone"));
+  assert.deepEqual(args.slice(args.indexOf("--mac"), args.indexOf("--mac") + 3), [
+    "--mac",
+    "zip",
+    "--arm64",
+  ]);
 });
 
 test("a command line for the build host keeps each word whole", () => {
