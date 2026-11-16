@@ -1385,6 +1385,21 @@ function unmergedFiles(runDir) {
   return git(["diff", "--name-only", "--diff-filter=U"], { runDir }).split("\n").filter(Boolean);
 }
 
+/**
+ * Stages the conflicted files as the agent left them: each one still in the index (unmerged,
+ * or staged and edited again) or on disk, so a deletion left unstaged is staged too. A file the
+ * agent deleted and staged the removal of is in neither and is left out, since git add refuses
+ * a path that matches nothing (ALM-4545).
+ */
+export function stageResolved(files, { runDir, cwd = BUILD } = {}) {
+  const indexed = new Set(
+    git(["ls-files", "-z", "--", ...files], { runDir, cwd }).split("\0").filter(Boolean),
+  );
+  const left = files.filter((file) => indexed.has(file) || existsSync(path.join(cwd, file)));
+  if (left.length > 0) git(["add", "--", ...left], { runDir, cwd });
+  return left;
+}
+
 /** One headless agent attempt per conflicting stop of the rebase; false leaves it to Tim. */
 function resolveConflicts({ oldBase, newBase, runDir }) {
   const configDir = path.join(ROOT, "agent-config");
@@ -1424,7 +1439,7 @@ function resolveConflicts({ oldBase, newBase, runDir }) {
       quiet: true,
     }).stdout;
     if (reply.status !== 0 || !/RESOLVED\s*$/.test(reply.stdout) || markers) return false;
-    git(["add", "--", ...files], { runDir });
+    stageResolved(files, { runDir });
     run("git", ["rebase", "--continue"], {
       step: "rebase",
       runDir,
