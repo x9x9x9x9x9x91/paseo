@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   branchSpecs,
+  checkoutCandidate,
   closedPulls,
   compareStableTags,
   countFailure,
@@ -600,6 +601,35 @@ test("a conflict the agent resolved stages what it left and reaches rebase --con
   assert.notEqual(show(removed).status, 0);
   assert.equal(show(unstaged).stdout, "resolved\n");
   assert.equal(show(restaged).stdout, "resolved again\n");
+});
+
+test("the build host checks out the candidate without the last build's ignored files", (t) => {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  const routes = "packages/app/.expo/types/router.d.ts";
+  write(".gitignore", ".expo/\nnode_modules/\ndist/\n");
+  write("packages/app/src/routes.ts", "the candidate's routes\n");
+  commit("the candidate");
+  git("branch", "fork-candidate");
+  // As the last build left the checkout: its generated routes, deps and output, a stray file
+  // and a tracked file edited in place.
+  write(routes, "the previous version's routes\n");
+  write("node_modules/dep/index.js", "dep\n");
+  write("packages/app/dist/index.html", "built\n");
+  write("stray.txt", "left over\n");
+  write("packages/app/src/routes.ts", "edited by a step\n");
+  checkoutCandidate({ cwd: repo });
+  const status = spawnSync("git", ["status", "--porcelain", "--ignored"], {
+    cwd: repo,
+    encoding: "utf8",
+  });
+  assert.equal(status.stdout, "");
+  const head = (ref) =>
+    spawnSync("git", ["rev-parse", ref], { cwd: repo, encoding: "utf8" }).stdout.trim();
+  assert.equal(head("HEAD"), head("fork-candidate"));
+  assert.equal(
+    readFileSync(path.join(repo, "packages/app/src/routes.ts"), "utf8"),
+    "the candidate's routes\n",
+  );
 });
 
 test("a release folder names every file the updater needs and the version in its manifest", () => {
