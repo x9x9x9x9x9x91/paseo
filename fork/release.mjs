@@ -804,17 +804,13 @@ function buildApp({ version, owner, runDir, env }) {
   rmSync(plan, { force: true });
   const started = Date.now();
   withDesktopVersion(version, () =>
-    run(
-      "npm",
-      buildArgs(owner),
-      {
-        step: "build",
-        runDir,
-        stream: true,
-        timeoutMs: 120 * 60_000,
-        env: { ...env, PASEO_FORK_SIGN_PLAN: plan, NODE_OPTIONS: "--max-old-space-size=8192" },
-      },
-    ),
+    run("npm", buildArgs(owner), {
+      step: "build",
+      runDir,
+      stream: true,
+      timeoutMs: 120 * 60_000,
+      env: { ...env, PASEO_FORK_SIGN_PLAN: plan, NODE_OPTIONS: "--max-old-space-size=8192" },
+    }),
   );
   if (!existsSync(plan)) {
     throw new StepFailure("build", "the build wrote no signing plan: its signing hook never ran");
