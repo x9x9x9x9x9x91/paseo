@@ -1382,14 +1382,15 @@ End your reply with one line: RESOLVED, or CANNOT: <one sentence why>.`;
 }
 
 function unmergedFiles(runDir) {
-  return git(["diff", "--name-only", "--diff-filter=U"], { runDir }).split("\n").filter(Boolean);
+  // -z, so a path git would quote (non-ASCII) comes back as its name on disk (ALM-4545).
+  const listed = git(["diff", "--name-only", "-z", "--diff-filter=U"], { runDir });
+  return listed.split("\0").filter(Boolean);
 }
 
 /**
- * Stages the conflicted files as the agent left them: each one still in the index (unmerged,
- * or staged and edited again) or on disk, so a deletion left unstaged is staged too. A file the
- * agent deleted and staged the removal of is in neither and is left out, since git add refuses
- * a path that matches nothing (ALM-4545).
+ * Stages each conflicted file still in the index (unmerged, or staged and edited again) or on
+ * disk; one the agent deleted and staged the removal of is in neither and is left out, since
+ * git add refuses a path that matches nothing (ALM-4545).
  */
 export function stageResolved(files, { runDir, cwd = BUILD } = {}) {
   const listed = git(["ls-files", "-z", "--", ...files], { runDir, cwd });
