@@ -1429,6 +1429,20 @@ export function stageResolved(files, { runDir, cwd = BUILD } = {}) {
   return left;
 }
 
+/** The conflict agent's command line for one stop, its tools CONFLICT_AGENT_TOOLS (ALM-4556). */
+export function conflictAgentArgs({ commit, oldBase, newBase, files }) {
+  return [
+    "-p",
+    conflictPrompt({ commit, oldBase, newBase, files }),
+    "--model",
+    AGENT_MODEL,
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    CONFLICT_AGENT_TOOLS,
+  ];
+}
+
 /** One headless agent attempt per conflicting stop of the rebase; false leaves it to Tim. */
 function resolveConflicts({ oldBase, newBase, runDir }) {
   const configDir = path.join(ROOT, "agent-config");
@@ -1438,31 +1452,18 @@ function resolveConflicts({ oldBase, newBase, runDir }) {
     if (files.length === 0) return false;
     const commit = git(["rev-parse", "--short", "REBASE_HEAD"], { runDir });
     log(`  conflict agent on ${commit}: ${files.join(", ")}`);
-    const reply = run(
-      "claude",
-      [
-        "-p",
-        conflictPrompt({ commit, oldBase, newBase, files }),
-        "--model",
-        AGENT_MODEL,
-        "--permission-mode",
-        "acceptEdits",
-        "--allowedTools",
-        CONFLICT_AGENT_TOOLS,
-      ],
-      {
-        step: "conflict-agent",
-        runDir,
-        quiet: true,
-        timeoutMs: 40 * 60_000,
-        env: {
-          CLAUDE_CONFIG_DIR: configDir,
-          ANTHROPIC_BASE_URL: PROXY_URL,
-          ANTHROPIC_AUTH_TOKEN: "vibeproxy-dummy",
-          ANTHROPIC_API_KEY: "",
-        },
+    const reply = run("claude", conflictAgentArgs({ commit, oldBase, newBase, files }), {
+      step: "conflict-agent",
+      runDir,
+      quiet: true,
+      timeoutMs: 40 * 60_000,
+      env: {
+        CLAUDE_CONFIG_DIR: configDir,
+        ANTHROPIC_BASE_URL: PROXY_URL,
+        ANTHROPIC_AUTH_TOKEN: "vibeproxy-dummy",
+        ANTHROPIC_API_KEY: "",
       },
-    );
+    });
     const markers = run("git", ["grep", "-l", "-E", "^(<<<<<<<|>>>>>>>) ", "--", ...files], {
       runDir,
       quiet: true,
