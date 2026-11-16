@@ -1194,6 +1194,16 @@ function checkRelease({ version, owner, runDir }) {
   return releaseFileNames(version).map((name) => path.join(releaseDir, name));
 }
 
+/**
+ * On the build host: the candidate checked out with the last build's git-ignored files cleared
+ * (`.expo`'s typed routes, `dist`, `node_modules`), so the gate starts from a fresh checkout as
+ * upstream's CI does and no earlier version's generated files reach its checks (ALM-4548).
+ */
+export function checkoutCandidate({ runDir, cwd = BUILD } = {}) {
+  git(["checkout", "-q", "-f", "--detach", HOST_REF], { runDir, cwd });
+  git(["clean", "-q", "-f", "-d", "-x"], { runDir, cwd });
+}
+
 /** The build host's half of a run, `app` (the checks and the unsigned app) or `package`. */
 function hostPhase(phase, runName) {
   const runDir = path.join(RUNS, runName);
@@ -1205,7 +1215,7 @@ function hostPhase(phase, runName) {
     const env = nodeEnv(job.nodeMajor, runDir);
     if (phase === "app") {
       log(`${runName}: checking and building ${job.version}`);
-      git(["checkout", "-q", "-f", "--detach", HOST_REF], { runDir });
+      checkoutCandidate({ runDir });
       runSteps(PREPARE_STEPS, { runDir, env });
       if (job.checks) gate({ runDir, env, ...job.checks });
       buildApp({ version: job.version, owner: job.owner, runDir, env });
