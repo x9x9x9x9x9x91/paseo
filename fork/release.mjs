@@ -1379,12 +1379,31 @@ function tail(file, lines = 40) {
   return readFileSync(file, "utf8").trimEnd().split("\n").slice(-lines).join("\n");
 }
 
-function conflictPrompt({ commit, oldBase, newBase, files }) {
+/**
+ * What the conflict agent may run: reads, edits, git's read commands, git add, and git rm,
+ * since a file upstream deleted is resolved by removing it and an unlisted command is refused
+ * in a headless run (ALM-4556).
+ */
+export const CONFLICT_AGENT_TOOLS = [
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "Bash(git show:*)",
+  "Bash(git log:*)",
+  "Bash(git diff:*)",
+  "Bash(git status:*)",
+  "Bash(git add:*)",
+  "Bash(git rm:*)",
+].join(",");
+
+export function conflictPrompt({ commit, oldBase, newBase, files }) {
   return `You are resolving a git rebase conflict in a fork of Paseo (${FORK_REPO}).
 The fork's release branch is upstream's stable tag plus a few commits of its own. They are being replayed from ${oldBase} onto upstream's new stable tag ${newBase}, and commit ${commit} stopped on conflicts in:
 ${files.map((file) => `- ${file}`).join("\n")}
 
-Read the commit (git show REBASE_HEAD), what upstream changed in those files (git log -p ${oldBase}..${newBase} -- <file>), and the conflicted files. Resolve every conflict so the commit does what it did before, written against upstream's new code. Keep upstream's changes; adapt the commit, not upstream. Remove every conflict marker and git add each resolved file.
+Read the commit (git show REBASE_HEAD), what upstream changed in those files (git log -p ${oldBase}..${newBase} -- <file>), and the conflicted files. Resolve every conflict so the commit does what it did before, written against upstream's new code. Keep upstream's changes; adapt the commit, not upstream. Remove every conflict marker and git add each resolved file. A conflicted file upstream deleted is resolved with git rm, the commit's change to it carried to where upstream's code now lives.
 
 Do not commit, do not run git rebase, do not install packages, build or run tests, and do not edit other files unless the commit needs it. The job runs typecheck, lint and the tests after you.
 
@@ -1429,7 +1448,7 @@ function resolveConflicts({ oldBase, newBase, runDir }) {
         "--permission-mode",
         "acceptEdits",
         "--allowedTools",
-        "Read,Edit,Write,Glob,Grep,Bash(git show:*),Bash(git log:*),Bash(git diff:*),Bash(git status:*),Bash(git add:*)",
+        CONFLICT_AGENT_TOOLS,
       ],
       {
         step: "conflict-agent",
