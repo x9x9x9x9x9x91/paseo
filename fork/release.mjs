@@ -1392,9 +1392,8 @@ function unmergedFiles(runDir) {
  * a path that matches nothing (ALM-4545).
  */
 export function stageResolved(files, { runDir, cwd = BUILD } = {}) {
-  const indexed = new Set(
-    git(["ls-files", "-z", "--", ...files], { runDir, cwd }).split("\0").filter(Boolean),
-  );
+  const listed = git(["ls-files", "-z", "--", ...files], { runDir, cwd });
+  const indexed = new Set(listed.split("\0").filter(Boolean));
   const left = files.filter((file) => indexed.has(file) || existsSync(path.join(cwd, file)));
   if (left.length > 0) git(["add", "--", ...left], { runDir, cwd });
   return left;
