@@ -768,9 +768,35 @@ function withDesktopVersion(version, body) {
 }
 
 /**
+ * The build host's `npm run build:desktop` arguments: a zip target, not --dir, since
+ * electron-builder writes the app's update feed (Contents/Resources/app-update.yml) only for a
+ * dmg or zip target and it has to be in the app before sincoder seals it (the unsigned zip itself
+ * is thrown away); the signing hook in place of signing; and the ad-hoc identity `-`, because
+ * electron-builder 26.18.0 calls the hook only when it finds an identity, and the build host
+ * holds none (ALM-4559). The plan the hook writes records no identity: sincoder signs as the
+ * fork's (sign-mac.cjs).
+ */
+export function buildArgs(owner) {
+  return [
+    "run",
+    "build:desktop",
+    "--",
+    "--publish",
+    "never",
+    "--mac",
+    "zip",
+    "--arm64",
+    ...feedConfig(owner),
+    `-c.mac.sign=${SIGN_HOOK}`,
+    "-c.mac.identity=-",
+    "-c.mac.notarize=false",
+  ];
+}
+
+/**
  * On the build host: the Mac app, versioned, updating from `owner`'s releases, and unsigned: the
- * signing hook writes the plan sincoder signs from instead (sign-mac.cjs). The app goes into the
- * run folder as an archive for sincoder to fetch.
+ * signing hook writes the plan sincoder signs from instead (sign-mac.cjs, buildArgs). The app
+ * goes into the run folder as an archive for sincoder to fetch.
  */
 function buildApp({ version, owner, runDir, env }) {
   rmSync(RELEASE_DIR, { recursive: true, force: true });
@@ -780,22 +806,7 @@ function buildApp({ version, owner, runDir, env }) {
   withDesktopVersion(version, () =>
     run(
       "npm",
-      [
-        "run",
-        "build:desktop",
-        "--",
-        "--publish",
-        "never",
-        // A zip target, not --dir: electron-builder writes the app's update feed
-        // (Contents/Resources/app-update.yml) only for a dmg or zip target, and it has to be in
-        // the app before sincoder seals it. The unsigned zip itself is thrown away.
-        "--mac",
-        "zip",
-        "--arm64",
-        ...feedConfig(owner),
-        `-c.mac.sign=${SIGN_HOOK}`,
-        "-c.mac.notarize=false",
-      ],
+      buildArgs(owner),
       {
         step: "build",
         runDir,
