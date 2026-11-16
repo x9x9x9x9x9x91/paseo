@@ -9,7 +9,9 @@ import {
   branchSpecs,
   checkoutCandidate,
   closedPulls,
+  CONFLICT_AGENT_TOOLS,
   compareStableTags,
+  conflictPrompt,
   countFailure,
   decide,
   deliverArgs,
@@ -601,6 +603,21 @@ test("a conflict the agent resolved stages what it left and reaches rebase --con
   assert.notEqual(show(removed).status, 0);
   assert.equal(show(unstaged).stdout, "resolved\n");
   assert.equal(show(restaged).stdout, "resolved again\n");
+});
+
+test("the conflict agent may git rm a file upstream deleted, and its prompt says to", () => {
+  const tools = CONFLICT_AGENT_TOOLS.split(",");
+  assert.ok(tools.includes("Bash(git rm:*)"));
+  assert.ok(tools.includes("Bash(git add:*)"));
+  assert.ok(!tools.some((tool) => /git (commit|rebase|reset|checkout)/.test(tool)));
+  const prompt = conflictPrompt({
+    commit: "6827d2572",
+    oldBase: "v0.15.0",
+    newBase: "v0.16.0",
+    files: ["packages/app/src/lib/overlay-root.test.tsx"],
+  });
+  assert.match(prompt, /- packages\/app\/src\/lib\/overlay-root\.test\.tsx/);
+  assert.match(prompt, /upstream deleted is resolved with git rm/);
 });
 
 test("the build host checks out the candidate without the last build's ignored files", (t) => {
