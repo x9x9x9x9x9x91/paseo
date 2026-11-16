@@ -617,7 +617,7 @@ test("the conflict agent may git rm a file upstream deleted, and its prompt says
     files: ["packages/app/src/lib/overlay-root.test.tsx"],
   });
   assert.match(prompt, /- packages\/app\/src\/lib\/overlay-root\.test\.tsx/);
-  assert.match(prompt, /upstream deleted is resolved with git rm/);
+  assert.match(prompt, /upstream deleted is resolved with git rm <file> \(never --cached/);
 });
 
 test("the build host checks out the candidate without the last build's ignored files", (t) => {
