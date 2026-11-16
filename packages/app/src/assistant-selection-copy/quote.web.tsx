@@ -177,8 +177,7 @@ function QuoteButton({
         return true;
       }
       // Like Escape, this comes before the app's shortcuts, dictation's Enter included.
-      // A keydown targets the focused element.
-      if (isBareEnter(event) && !focusReadsEnter(document.activeElement)) {
+      if (isBareEnter(event) && !focusReadsEnter()) {
         event.preventDefault();
         onPress();
         return true;
@@ -254,6 +253,7 @@ function QuoteNoteBox({
       if (
         event.key === "Enter" &&
         !event.shiftKey &&
+        // The focused element, not the key's target: an overlay's key event may carry none.
         document.activeElement === input &&
         !isImeComposingKeyboardEvent(event)
       ) {
@@ -431,9 +431,12 @@ function isBareEnter(event: KeyboardInputEvent): boolean {
 /**
  * Whether the focused element answers Enter itself: a text field, the composer or the
  * terminal, or a control Enter presses. Only Enter that would otherwise do nothing opens
- * the note box.
+ * the note box. It reads `document.activeElement`, never the key event's target, since an
+ * overlay's key event may carry no target (upstream's keyboard pipeline from v0.16.0 hands
+ * overlays a copy of the key without one), ALM-4553.
  */
-function focusReadsEnter(target: EventTarget | null): boolean {
+function focusReadsEnter(): boolean {
+  const target = document.activeElement;
   if (resolveKeyboardFocusScope({ target, commandCenterOpen: false }) !== "other") return true;
   return target instanceof HTMLElement && target !== document.body && target.tabIndex >= 0;
 }
