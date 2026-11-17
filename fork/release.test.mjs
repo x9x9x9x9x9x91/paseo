@@ -35,6 +35,7 @@ import {
   parseStableTag,
   pathsOutsideScope,
   queueNotice,
+  readKeptRebase,
   releaseFileNames,
   releaseFilesProblem,
   releaseKey,
@@ -653,6 +654,113 @@ test("a conflict the agent resolved stages what it left and reaches rebase --con
   assert.notEqual(show(removed).status, 0);
   assert.equal(show(unstaged).stdout, "resolved\n");
   assert.equal(show(restaged).stdout, "resolved again\n");
+});
+
+// One run's rebase in a child process, whose job folder (PASEO_FORK_ROOT) is the test's own. Its
+// agent resolves a stop in `ports` by writing the port with the agent's run number, so a port
+// made again reads differently, and answers CANNOT for a file not in `ports`.
+const REBASE_RUN = `
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+const { rebaseOnto } = await import(process.env.JOB_URL);
+const { cwd, head, drop, ports, calls } = JSON.parse(process.env.RUN);
+const askAgent = ({ files }) => {
+  appendFileSync(calls, files.join(",") + "\\n");
+  const runs = readFileSync(calls, "utf8").trim().split("\\n").length;
+  if (!files.every((file) => file in ports)) return { status: 0, stdout: "CANNOT: no port" };
+  for (const file of files) writeFileSync(path.join(cwd, file), ports[file] + " " + runs + "\\n");
+  return { status: 0, stdout: "RESOLVED" };
+};
+const rebased = rebaseOnto({ newBase: "v0.11.5", oldBase: "v0.11.4", head, drop, cwd, askAgent });
+// Last, on a line of its own: the job's log lines come before it.
+process.stdout.write("\\n" + JSON.stringify(rebased) + "\\n");
+`;
+
+test("a rebase the agent resolved is kept, so the next run ports only the commits after it", (t) => {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  const root = mkdtempSync(path.join(os.tmpdir(), "fork-root-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const calls = path.join(root, "agent-calls");
+  writeFileSync(calls, "");
+  const rev = (ref) =>
+    spawnSync("git", ["rev-parse", ref], { cwd: repo, encoding: "utf8" }).stdout.trim();
+  const show = (ref, file) =>
+    spawnSync("git", ["show", `${ref}:${file}`], { cwd: repo, encoding: "utf8" }).stdout;
+  const agentRuns = () => readFileSync(calls, "utf8").split("\n").filter(Boolean);
+  for (const [key, value] of [
+    ["user.name", "fork"],
+    ["user.email", "fork@example.invalid"],
+    ["commit.gpgsign", "false"],
+    ["core.hooksPath", "/dev/null"],
+  ]) {
+    git("config", key, value);
+  }
+  const [first, second] = ["packages/app/src/a.ts", "packages/app/src/b.ts"];
+  write(first, "upstream's a\n");
+  write(second, "upstream's b\n");
+  commit("upstream's files");
+  git("tag", "-f", "v0.11.4");
+  git("checkout", "-q", "-b", "fork");
+  write(first, "the fork's a\n");
+  commit("feat(app): the fork's a");
+  write(second, "the fork's b\n");
+  commit("feat(app): the fork's b");
+  git("checkout", "-q", "-b", "upstream", "v0.11.4");
+  write(first, "upstream's next a\n");
+  write(second, "upstream's next b\n");
+  commit("upstream's next release");
+  git("tag", "v0.11.5");
+  git("checkout", "-q", "fork");
+  const rebase = ({ head = rev("fork"), ports }) => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", REBASE_RUN], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PASEO_FORK_ROOT: root,
+        JOB_URL: new URL("./release.mjs", import.meta.url).href,
+        RUN: JSON.stringify({ cwd: repo, head, drop: [], ports, calls }),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout.trim().split("\n").at(-1));
+  };
+
+  // Try 1: the agent ports a, then cannot port b. The port of a is kept.
+  const portA = { [first]: "the port of a" };
+  assert.ok(rebase({ ports: portA }).conflict);
+  assert.deepEqual(agentRuns(), [first, second]);
+  const kept = readKeptRebase(repo);
+  assert.equal(kept.source, rev("fork~1"));
+  assert.equal(show(kept.result, first), "the port of a 1\n");
+
+  // A fix lands on the branch; try 2 ports b and the fix's commit replays, a is not ported again.
+  git("checkout", "-q", "fork");
+  write("fork/release.mjs", "the job's fix\n");
+  commit("fork: the job's fix");
+  const ports = { ...portA, [second]: "the port of b" };
+  assert.deepEqual(rebase({ ports }), { resolvedBy: "agent" });
+  assert.deepEqual(agentRuns(), [first, second, second]);
+  assert.equal(show("HEAD", first), "the port of a 1\n");
+  assert.equal(show("HEAD", second), "the port of b 3\n");
+  assert.equal(show("HEAD", "fork/release.mjs"), "the job's fix\n");
+  assert.equal(kept.result, rev("HEAD~2"));
+  const whole = rev("HEAD");
+  assert.equal(readKeptRebase(repo).source, rev("fork"));
+
+  // Try 3 on the same branch: the kept rebase is the candidate as it was, with no agent.
+  git("checkout", "-q", "fork");
+  assert.deepEqual(rebase({ ports }), { resolvedBy: "agent" });
+  assert.equal(agentRuns().length, 3);
+  assert.equal(rev("HEAD"), whole);
+
+  // A branch rewritten below the kept rebase (a amended for a fresh port) rebases from scratch.
+  git("checkout", "-q", "--detach", "fork~2");
+  git("commit", "-q", "--amend", "-m", "feat(app): the fork's a, amended");
+  git("cherry-pick", "fork~1", "fork");
+  git("branch", "-f", "fork", "HEAD");
+  rebase({ ports });
+  assert.equal(agentRuns().length, 5);
+  assert.equal(show("HEAD", first), "the port of a 4\n");
 });
 
 test("the conflict agent may git rm a file upstream deleted, and its prompt says to", () => {
