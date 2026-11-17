@@ -1504,13 +1504,14 @@ function conflictAgent({ commit, oldBase, newBase, files, runDir }) {
 
 /**
  * One headless agent attempt per conflicting stop of the rebase. `done` false leaves it to Tim;
- * `resolved` counts the stops the agent got past, which the kept rebase carries (keptRebase).
+ * `resolved` counts the stops the agent got past, which the kept rebase carries (keptRebase);
+ * `keepPart` false says HEAD no longer replays the branch up to the stop.
  */
 function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = conflictAgent }) {
   let resolved = 0;
   for (let stop = 0; stop < 5 && rebaseInProgress(cwd); stop += 1) {
     const files = unmergedFiles(runDir, cwd);
-    if (files.length === 0) return { done: false, resolved };
+    if (files.length === 0) return { done: false, resolved, keepPart: true };
     const stopped = git(["rev-parse", "REBASE_HEAD"], { runDir, cwd });
     const commit = stopped.slice(0, 9);
     log(`  conflict agent on ${commit}: ${files.join(", ")}`);
@@ -1521,9 +1522,10 @@ function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = co
       quiet: true,
     }).stdout;
     if (reply.status !== 0 || !/RESOLVED\s*$/.test(reply.stdout) || markers) {
-      return { done: false, resolved };
+      return { done: false, resolved, keepPart: true };
     }
     stageResolved(files, { runDir, cwd });
+    const before = git(["rev-parse", "HEAD"], { runDir, cwd });
     run("git", ["rebase", "--continue"], {
       step: "rebase",
       runDir,
@@ -1531,15 +1533,19 @@ function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = co
       quiet: true,
       env: { GIT_EDITOR: "true" },
     });
-    // A continue that stops on a later commit's conflicts has still committed this one.
+    // A continue that stops on a later commit's conflicts has still committed this one. One that
+    // moved HEAD but still stops on this commit is neither, and keeps no part (keepUpToStop).
     const after = rebaseInProgress(cwd)
       ? run("git", ["rev-parse", "-q", "--verify", "REBASE_HEAD"], { runDir, cwd, quiet: true })
           .stdout
       : "";
-    if (after === stopped) return { done: false, resolved };
+    if (after === stopped) {
+      const moved = git(["rev-parse", "HEAD"], { runDir, cwd }) !== before;
+      return { done: false, resolved, keepPart: !moved };
+    }
     resolved += 1;
   }
-  return { done: !rebaseInProgress(cwd), resolved };
+  return { done: !rebaseInProgress(cwd), resolved, keepPart: true };
 }
 
 /** The build clone's kept rebase: its record in the clone's git dir, its result held by a ref. */
@@ -1642,20 +1648,29 @@ export function rebaseOnto({
     record(head, git(["rev-parse", "HEAD"], at));
     return { resolvedBy };
   }
-  const { done, resolved } = resolveConflicts({ oldBase, newBase, ...at, askAgent });
-  if (resolved > 0) resolvedBy = "agent";
-  if (done) {
+  const resolution = resolveConflicts({ oldBase, newBase, ...at, askAgent });
+  if (resolution.resolved > 0) resolvedBy = "agent";
+  if (resolution.done) {
     record(head, git(["rev-parse", "HEAD"], at));
     return { resolvedBy };
   }
-  // Read where the rebase stopped last, which is not the first stop when the agent got further.
+  const { keepPart } = resolution;
+  return { conflict: leaveStoppedRebase({ start, base, head, record, keepPart, ...at }) };
+}
+
+/**
+ * The conflict a rebase the agent could not finish stopped on, read where it stopped last (not
+ * the first stop when the agent got further), with the rebase kept up to there and aborted.
+ */
+function leaveStoppedRebase({ start, base, head, record, keepPart, runDir, cwd }) {
+  const at = { runDir, cwd };
   const files = rebaseInProgress(cwd) ? unmergedFiles(runDir, cwd) : [];
   const diff = run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000);
   if (rebaseInProgress(cwd)) {
-    keepUpToStop({ start, base, head, record, ...at });
+    if (keepPart) keepUpToStop({ start, base, head, record, ...at });
     run("git", ["rebase", "--abort"], { ...at, quiet: true });
   }
-  return { conflict: { files, diff } };
+  return { files, diff };
 }
 
 /**
