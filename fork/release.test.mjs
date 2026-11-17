@@ -25,6 +25,8 @@ import {
   forkOnlySubjects,
   forkVersion,
   gateSteps,
+  HERE,
+  hereName,
   holdForNotary,
   liveIsOpen,
   nextForkNumber,
@@ -43,6 +45,7 @@ import {
   releaseKey,
   releaseNotices,
   retriedPasses,
+  signedBy,
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
@@ -515,6 +518,152 @@ test("the notary is asked before the build with the job's profile; only a refusa
   assert.equal(notaryRefusal(fake(0, "name: HTTP status code: 401")), null);
 });
 
+test("behind the release program the notary is asked by its notary-check; only Apple's refusal holds", () => {
+  const program = ["sudo", "-n", "-u", "release", "/x/substrate-release"];
+  const calls = [];
+  const answer =
+    (status, stderr = "") =>
+    (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return { status, stdout: "", stderr };
+    };
+  assert.equal(notaryRefusal(answer(1, REFUSED_401), program), REFUSED_401);
+  assert.deepEqual(calls[0], [...program, "notary-check"]);
+  assert.equal(notaryRefusal(answer(0, "notary: Apple takes the profile"), program), null);
+  // another of its steps holds the keychain: no refusal, the build goes ahead
+  assert.equal(notaryRefusal(answer(75, "another step holds the hold"), program), null);
+  // a refusal of sudo's or the program's own is no word of Apple's on the profile
+  assert.equal(notaryRefusal(answer(1, "sudo: a password is required"), program), null);
+});
+
+test("behind the release program a refused notary login is Tim's new App Store Connect key", () => {
+  const ctx = { latestTag: "v0.14.0", candidate: "v0.14.0 abc" };
+  const at = "2026-10-29T13:40:00.000Z";
+  const program = ["sudo", "-n", "-u", "release", "/x/substrate-release"];
+  const [mini1] = holdForNotary({}, { ctx, refused: REFUSED_401, at, program }).pendingNotices;
+  assert.equal(
+    mini1.ask,
+    "Import a new App Store Connect key into mini1's release account, so Apple's notary lets substrate-notary in and the Paseo fork builds upstream v0.14.0",
+  );
+  assert.match(mini1.body, /substrate-release import asc-key/);
+  assert.doesNotMatch(mini1.body, /Your step: make a new app-specific password/);
+  // an agreement waiting is the same step wherever the job runs
+  const agreement = "Error: HTTP status code: 403. A required agreement is missing";
+  const [waits] = holdForNotary({}, { ctx, refused: agreement, at, program }).pendingNotices;
+  assert.match(waits.ask, /^Accept the Apple Developer agreement/);
+});
+
+test("the release program's sign gets the zip on stdin, its answer kept, its busy exit no failure", (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "fork-signed-by-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const program = ["sudo", "-n", "-u", "release", "/x/substrate-release"];
+  const sent = path.join(root, "sent.zip");
+  const back = path.join(root, "back.zip");
+  writeFileSync(sent, "the unsigned app and its plan");
+  const calls = [];
+  const signer =
+    (status, said, out = "") =>
+    (cmd, args, options) => {
+      calls.push({ cmd, args, stdin: readFileSync(options.stdio[0], "utf8") });
+      if (out) writeFileSync(options.stdio[1], out);
+      writeFileSync(options.stdio[2], said);
+      return { status };
+    };
+  // the notary asked again after Apple took nothing: allowed unless a test says it refuses
+  let refusal = () => null;
+  const attempt = (spawn) => {
+    const logFile = path.join(root, `sign-${calls.length}.log`);
+    try {
+      signedBy({ program, sent, back, logFile, spawn, refusal });
+      return null;
+    } catch (error) {
+      return error;
+    }
+  };
+  assert.equal(attempt(signer(0, "signed, notarized, stapled\n", "the signed app")), null);
+  assert.deepEqual(calls[0], {
+    cmd: "sudo",
+    args: ["-n", "-u", "release", "/x/substrate-release", "sign"],
+    stdin: "the unsigned app and its plan",
+  });
+  assert.equal(readFileSync(back, "utf8"), "the signed app");
+  // busy: tried next hour, never the candidate's failure (no step)
+  const busy = attempt(signer(75, "another step holds the hold\n"));
+  assert.match(busy.message, /held by another of its steps/);
+  assert.equal(busy.step, undefined);
+  // a plan it refuses is the sign step's, counted at once
+  const refused = attempt(
+    signer(
+      1,
+      // as the program says it: the plan's line, then sign()'s own closing line
+      "sign: Paseo.app as Developer ID Application: Tim Roth (HKM8HFGKC6), from its plan\nsubstrate-release: the plan asks for osx-sign 1.4.0, and 1.3.3 is pinned here\nsubstrate-release: the signing of Paseo.app failed\n",
+    ),
+  );
+  // the program's osx-sign is pinned in Alma's repo: the signer's step, whose ask names that pin
+  assert.equal(refused.step, "signer");
+  assert.equal(refused.outside, false);
+  assert.match(readFileSync(refused.logFile, "utf8"), /osx-sign 1\.4\.0/);
+  const pinAsk = failureNotice({
+    outcome: "failed",
+    error: refused,
+    ctx: { latestTag: "v0.17.0", head: "d975b4af3777b9c7e645b1d37a63abdcee16504e" },
+    attempts: 1,
+    previous: "0.16.1-fork.1",
+    runDir: "/x/runs/r",
+  }).ask;
+  assert.match(pinAsk, /OSX_SIGN_VERSION in Alma's scripts\/agent-host\/substrate-release/);
+  assert.match(pinAsk, /never a commit on fork\/release$/);
+  assert.match(refused.message, /osx-sign 1\.4\.0, and 1\.3\.3 is pinned here/);
+  // the program's own words (scripts/agent-host/substrate-release in Alma's repo)
+  const submitted =
+    "sign: Paseo.app as Developer ID Application: Tim Roth (HKM8HFGKC6), from its plan\nnotarize: submitted, waiting for Apple's verdict (up to 1 h)\n";
+  const took = `${submitted}substrate-release: Apple did not accept Paseo.app: \n`;
+  // the notary down or slow once asked, its profile still let in: notarize's, outside
+  const down = attempt(signer(1, took));
+  assert.equal(down.step, "notarize");
+  assert.equal(down.outside, true);
+  // the same words with the profile refused when asked again: a hold for Tim's step, never a count
+  refusal = (spawn, asked) => (asked === program ? REFUSED_401 : null);
+  const refusedLogin = attempt(signer(1, took));
+  assert.equal(refusedLogin.step, "notary");
+  assert.equal(refusedLogin.refused, REFUSED_401);
+  refusal = () => null;
+  // the notary rejecting the app is the candidate's
+  const rejected = attempt(
+    signer(
+      1,
+      `${submitted}substrate-release: Apple did not accept Paseo.app: "id": "a1" "status": "Invalid"\n`,
+    ),
+  );
+  assert.equal(rejected.step, "notarize");
+  assert.equal(rejected.outside, false);
+  // a ticket that did not staple is Apple's, as sincoder's stapler at notarize
+  const staple = attempt(
+    signer(1, `${submitted}substrate-release: the ticket did not staple onto Paseo.app\n`),
+  );
+  assert.equal(staple.step, "notarize");
+  assert.equal(staple.outside, true);
+  // Gatekeeper or codesign refusing the signed app is the candidate's, at verify
+  for (const words of [
+    "Gatekeeper does not accept Paseo.app",
+    "Paseo.app does not verify after its signing",
+  ]) {
+    const refusedApp = attempt(signer(1, `${submitted}substrate-release: ${words}\n`));
+    assert.equal(refusedApp.step, "verify");
+    assert.equal(refusedApp.outside, false);
+  }
+  // the signing itself failing, before the notary, is the candidate's
+  const unsigned = attempt(signer(1, "substrate-release: the signing of Paseo.app failed\n"));
+  assert.equal(unsigned.step, "sign");
+  assert.equal(unsigned.outside, false);
+  assert.match(unsigned.message, /: substrate-release: the signing of Paseo\.app failed$/);
+});
+
+test("a notice names the Mac the job runs on, with the account when it is not the Mac's own", () => {
+  assert.equal(hereName("sincoder", "sincoder"), "sincoder");
+  assert.equal(hereName("alma", "mini1"), "alma@mini1");
+});
+
 test("a refused profile holds the candidate uncounted and turns its note over to Tim once", () => {
   const candidate = "v0.14.0@51c93a2d9";
   const ctx = { latestTag: "v0.14.0", candidate };
@@ -547,7 +696,7 @@ test("a refused profile holds the candidate uncounted and turns its note over to
   assert.equal(note.needs, "tim");
   assert.equal(
     note.ask,
-    "Store a new app-specific password as substrate-notary on sincoder, so Apple's notary lets it in and the Paseo fork builds upstream v0.14.0",
+    `Store a new app-specific password as substrate-notary on ${HERE}, so Apple's notary lets it in and the Paseo fork builds upstream v0.14.0`,
   );
   const args = deliverArgs(note);
   assert.deepEqual(args.slice(args.indexOf("--needs"), args.indexOf("--needs") + 3), [
@@ -1190,6 +1339,10 @@ test("the build Mac's signing plan gives sincoder every path's options from elec
   ]);
   // only the bundle differs from the default, so only it is listed by path
   assert.deepEqual(Object.keys(plan.byPath), [""]);
+  // the bundle's own entry carries the two-team requirement, for a signer that adds none
+  const bundle = plan.options[plan.byPath[""]];
+  assert.equal(bundle.requirements, `=${designatedRequirement("sh.paseo.desktop")}`);
+  assert.equal(plan.options[plan.defaultIndex].requirements, undefined);
 
   // sincoder unpacks the same app elsewhere
   const app = fakeApp(path.join(root, "sign"));
@@ -1263,9 +1416,9 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
     refused.ask,
     /is Tim's step .* needs no fix on fork\/release, so name it as his step$/,
   );
-  assert.match(
+  assert.ok(
+    first.body.includes(`Run log: /x/paseo-release/runs/2026-10-26T09-32-38.733Z on ${HERE}.`),
     first.body,
-    /Run log: \/x\/paseo-release\/runs\/2026-10-26T09-32-38\.733Z on sincoder/,
   );
   assert.match(last.body, /attempt 3 of 3/);
   assert.ok(!first.ask.includes("\n"));
@@ -1428,7 +1581,7 @@ test("an upstream release's failures rewrite its one note, and its publish settl
   assert.equal(report.level, "info");
   assert.equal(report.ask, undefined);
   assert.equal(report.title, "Paseo fork 0.13.2-fork.1 is out on upstream v0.13.2");
-  assert.match(report.body, /Run log: \/x\/runs\/r3 on sincoder/);
+  assert.ok(report.body.includes(`Run log: /x/runs/r3 on ${HERE}.`), report.body);
   assert.doesNotMatch(report.body, /conflict/);
 });
 
