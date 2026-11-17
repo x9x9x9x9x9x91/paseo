@@ -6,6 +6,8 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  APP_PARTS,
+  appChanges,
   branchSpecs,
   buildArgs,
   checkoutCandidate,
@@ -31,6 +33,7 @@ import {
   notaryOutside,
   notaryRefusal,
   notaryRefused,
+  onlyToolsChanged,
   OUTSIDE_STEPS,
   parseStableTag,
   pathsOutsideScope,
@@ -46,6 +49,7 @@ import {
   shouldSkipCandidate,
   stageResolved,
   supersededBy,
+  topLevelParts,
   withoutTrailers,
 } from "./release.mjs";
 import { FORK_IDENTITY, designatedRequirement, optionsFromPlan, signPlan } from "./sign-mac.cjs";
@@ -79,6 +83,109 @@ test("a run rebases on a newer upstream release and releases an unpublished head
   assert.equal(decide({ ...base, latestTag: "v0.11.5", publishedCommit: "abc" }), "rebase");
   // upstream took its release back: the fork's release stands until upstream catches up
   assert.equal(decide({ ...base, latestTag: "v0.11.3", publishedCommit: "old" }), "current");
+});
+
+test("a head that changes only the job's own files runs the gate once, and never on a new tag", () => {
+  const base = { latestTag: "v0.11.4", baseTag: "v0.11.4", head: "abc", publishedCommit: "old" };
+  assert.equal(decide({ ...base, toolsOnly: true }), "gate");
+  assert.equal(decide({ ...base, toolsOnly: true, gatedCommit: "abc" }), "current");
+  assert.equal(decide({ ...base, toolsOnly: true, gatedCommit: "older" }), "gate");
+  assert.equal(decide({ ...base, toolsOnly: false, gatedCommit: "older" }), "release");
+  assert.equal(decide({ ...base, latestTag: "v0.11.5", toolsOnly: true }), "rebase");
+});
+
+const JOB = readFileSync(fileURLToPath(new URL("./release.mjs", import.meta.url)), "utf8");
+
+/** release.mjs with `from` replaced by `to` once, where `from` stands once. */
+function jobWith(from, to, text = JOB) {
+  assert.equal(text.split(from).length, 2, `once in release.mjs: ${from}`);
+  return text.replace(from, to);
+}
+
+test("release.mjs reads as its declarations, every app part one of them", () => {
+  const parts = topLevelParts(JOB);
+  const declared = [...JOB.matchAll(/^(?:export )?(?:async )?(?:function|const|class) (\w+)/gm)];
+  assert.deepEqual(
+    declared.map(([, name]) => name).filter((name) => !parts.has(name)),
+    [],
+  );
+  assert.deepEqual(
+    [...APP_PARTS].filter((name) => !parts.has(name)),
+    [],
+  );
+  // the conflict prompt's lines in column 0 stay in its template literal
+  assert.match(parts.get("conflictPrompt"), /End your reply with one line/);
+  assert.deepEqual(appChanges(JOB, JOB), []);
+});
+
+test("a change to the job's own parts or comments changes no app, one to its build or release does", () => {
+  const retry = jobWith(`"--retry=1"`, `"--retry=2"`);
+  assert.deepEqual(appChanges(JOB, retry), []);
+  const comment = jobWith("// The fork's own commits", "// The fork's very own commits");
+  assert.deepEqual(appChanges(JOB, comment), []);
+  const prompt = jobWith("End your reply with one line", "End your answer with one line");
+  assert.deepEqual(appChanges(JOB, prompt), []);
+  assert.deepEqual(
+    appChanges(JOB, jobWith(`"-c.publish.channel=latest"`, `"-c.publish.channel=beta"`)),
+    ["feedConfig"],
+  );
+  assert.deepEqual(appChanges(JOB, jobWith(`"-c.mac.identity=-"`, `"-c.mac.identity=X"`)), [
+    "buildArgs",
+  ]);
+  assert.deepEqual(appChanges(JOB, jobWith(`"1h",`, `"2h",`)), ["notarize"]);
+  // a statement that is no declaration, here an import, changes the app
+  const imported = jobWith(
+    `import os from "node:os";`,
+    `import os from "node:os";\nimport fs from "node:fs";`,
+  );
+  assert.deepEqual(appChanges(JOB, imported), ['statement: import fs from "node:fs";']);
+  // an app part renamed away is a change too
+  const renamed = jobWith("function feedConfig(owner) {", "function updateFeed(owner) {");
+  assert.ok(appChanges(JOB, renamed).includes("feedConfig"));
+});
+
+test("a backtick outside a template literal makes release.mjs a change as a whole", () => {
+  const at = "function shellLine(words) {";
+  const tick = jobWith(at, `${at}\n  const tick = /\x60/;`);
+  assert.deepEqual(appChanges(JOB, tick), ["release.mjs, read as a whole"]);
+  const escaped = jobWith(at, `${at}\n  const tick = /\\x60/;`);
+  assert.deepEqual(appChanges(JOB, escaped), []);
+});
+
+test("a head ships the published app when it changes only the job's own files, release.mjs's app parts aside", (t) => {
+  const { repo, write, commit } = upstreamRepo(t);
+  const rev = () =>
+    spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+  write("packages/app/src/feature.tsx", "a feature\n");
+  write("fork/release.mjs", JOB);
+  write("fork/sign-mac.cjs", "the signing\n");
+  write("fork/README.md", "the job\n");
+  commit("feat(app): a feature, and the job");
+  const published = rev();
+  write("fork/README.md", "the job, said better\n");
+  write("fork/release.test.mjs", "a test\n");
+  write("fork/release.mjs", jobWith(`"--retry=1"`, `"--retry=2"`));
+  commit("fork: the job's own files");
+  const tools = rev();
+  assert.equal(onlyToolsChanged(published, tools, { cwd: repo }), true);
+  write("fork/release.mjs", jobWith(`"-c.publish.channel=latest"`, `"-c.publish.channel=beta"`));
+  commit("fork: the update feed");
+  assert.equal(onlyToolsChanged(published, rev(), { cwd: repo }), false);
+  write("fork/release.mjs", JOB);
+  write("fork/sign-mac.cjs", "the signing, changed\n");
+  commit("fork: the signing");
+  assert.equal(onlyToolsChanged(published, rev(), { cwd: repo }), false);
+  write("fork/sign-mac.cjs", "the signing\n");
+  write("packages/app/src/feature.tsx", "a feature, changed\n");
+  commit("feat(app): the feature changed");
+  assert.equal(onlyToolsChanged(published, rev(), { cwd: repo }), false);
+  write("packages/app/src/feature.tsx", "a feature\n");
+  write("fork/helper.mjs", "a new file of the job's\n");
+  commit("fork: a new file");
+  assert.equal(onlyToolsChanged(published, rev(), { cwd: repo }), false);
+  assert.equal(onlyToolsChanged(published, published, { cwd: repo }), false);
+  assert.equal(onlyToolsChanged(null, tools, { cwd: repo }), false);
+  assert.equal(onlyToolsChanged("0".repeat(40), tools, { cwd: repo }), false);
 });
 
 test("the fork's own commits are told apart from its features", () => {
