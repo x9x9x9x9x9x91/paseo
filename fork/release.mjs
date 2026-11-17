@@ -732,10 +732,11 @@ export function branchSpecs(tag, { runDir, cwd } = {}) {
 
 /**
  * Fails when the branch changes a file on `tag` that is not the fork's to change. The paths are
- * read with -z, since git quotes a non-ASCII one and the quote fails every allowed path (ALM-4579).
+ * read with -z, since git quotes a non-ASCII one and the quote fails every allowed path, and with
+ * --no-renames, so a file moved into the app names the path it left too (ALM-4579).
  */
 export function checkScope(tag, { runDir, cwd } = {}) {
-  const changed = git(["diff", "--name-only", "-z", tag, "HEAD"], { runDir, cwd })
+  const changed = git(["diff", "--name-only", "-z", "--no-renames", tag, "HEAD"], { runDir, cwd })
     .split("\0")
     .filter(Boolean);
   const outside = pathsOutsideScope(changed);
