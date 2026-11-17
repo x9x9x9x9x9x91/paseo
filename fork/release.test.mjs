@@ -39,6 +39,7 @@ import {
   releaseFilesProblem,
   releaseKey,
   releaseNotices,
+  retriedPasses,
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
@@ -753,7 +754,7 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
   const withSpecs = byStep(["e2e/browser/a.spec.ts"]);
   assert.deepEqual(withSpecs["app-unit"], [
     "npm",
-    ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1"],
+    ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
   ]);
   assert.deepEqual(withSpecs.e2e, [
     "npm",
@@ -761,6 +762,20 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
   ]);
   assert.equal(gateSteps([]).at(-1)[0], "two-way-audio");
   assert.equal(byStep([]).e2e, undefined);
+});
+
+test("the app-unit step's log names the tests that passed only on their retry", () => {
+  const stepLog = [
+    "$ npm run test --workspace=@getpaseo/app -- --retry=1 --reporter=verbose",
+    " \u001b[32m✓\u001b[39m \u001b[30m unit \u001b[39m src/a.test.ts:3:1 > a > passes 2ms",
+    " \u001b[32m✓\u001b[39m  browser (chromium)  src/b.browser.test.tsx:9:3 > b > drops 150ms\u001b[33m (retry x1)\u001b[39m",
+    " \u001b[31m×\u001b[39m  unit  src/c.test.ts:5:1 > c > fails twice 3ms\u001b[33m (retry x1)\u001b[39m",
+    "exit=0",
+  ].join("\n");
+  assert.deepEqual(retriedPasses(stepLog), [
+    "browser (chromium)  src/b.browser.test.tsx:9:3 > b > drops 150ms (retry x1)",
+  ]);
+  assert.deepEqual(retriedPasses("exit=0\n"), []);
 });
 
 test("a command line for the build host keeps each word whole", () => {
