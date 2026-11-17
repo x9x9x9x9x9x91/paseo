@@ -161,7 +161,11 @@ test("a new part is the app's until the job lists it, and listing an old part le
   ]);
   // once listed in the published text, a part is the job's own
   const listed = jobWith(list, `${list}\n  "gateHelper",`, helper);
-  const changedHelper = jobWith("  return 1;\n}\n\nfunction gate(", "  return 2;\n}\n\nfunction gate(", listed);
+  const changedHelper = jobWith(
+    "  return 1;\n}\n\nfunction gate(",
+    "  return 2;\n}\n\nfunction gate(",
+    listed,
+  );
   assert.deepEqual(appChanges(listed, changedHelper), []);
 });
 
