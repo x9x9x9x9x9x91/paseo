@@ -65,52 +65,120 @@ const TOOLS_FILES = new Set([
   "fork/install.sh",
   "fork/com.alma.paseo-fork-release.plist",
 ]);
-// The parts of release.mjs that make the app or its release: its version, Node, install, build,
-// update feed, signing, notarizing, packing, verifying and publishing. A change to one of them,
-// to a top-level statement that is no named declaration (an import, the entry point) or to a part
-// that comes or goes under one of these names changes the app (appChanges).
-export const APP_PARTS = new Set([
-  "FORK_REPO",
-  "UPSTREAM_REPO",
-  "TOOLS",
-  "SIGN_HOOK",
-  "NOTARY_PROFILE",
-  "APP_ARCHIVE",
-  "SIGN_PLAN",
-  "SIGNED_ARCHIVE",
-  "SIGNER",
-  "DESKTOP",
-  "RELEASE_DIR",
-  "BUILT_APP",
-  "forkVersion",
-  "nextForkNumber",
-  "nodeMajorFromWorkflow",
-  "nodeMajor",
-  "nodeEnv",
-  "PREPARE_STEPS",
-  "runSteps",
-  "checkoutCandidate",
-  "prepareHost",
-  "hostPhase",
-  "feedConfig",
-  "withDesktopVersion",
-  "buildArgs",
-  "buildApp",
-  "ensureSigner",
-  "notarize",
-  "signHere",
-  "packageApp",
-  "verifyManifest",
-  "verifyApp",
-  "sameRequirement",
-  "releaseFileNames",
-  "releaseFilesProblem",
-  "checkRelease",
-  "publish",
-  "releaseNotes",
-  "handoverNotes",
-  "release",
-  "retire",
+// The parts of release.mjs that are the job's own: deciding, polling, rebasing, the gate's
+// checks, the build host's plumbing, state and notices. Every other part (the version, Node, the
+// install, the build and its environment, the feed, signing, notarizing, packing, verifying,
+// publishing, and this rule itself) and every top-level statement that is no named declaration
+// makes the app, so a part nobody listed counts as a change to it (appChanges).
+export const TOOLS_PARTS = new Set([
+  "RELEASE_BRANCH",
+  "UPSTREAM_PULLS",
+  "FORK_SUBJECT",
+  "UPSTREAM_TRAILER",
+  "SUPERSEDED_TRAILER",
+  "ALLOWED_PATHS",
+  "LABEL",
+  "NOTIFY_SCRIPT",
+  "STATE_COPY",
+  "PROXY_URL",
+  "AGENT_MODEL",
+  "BUILD_HOSTS",
+  "HOST_AWAY",
+  "MAX_ATTEMPTS",
+  "OUTSIDE_STEPS",
+  "OUTSIDE_GRACE_MS",
+  "NOTARY_REFUSED",
+  "APP_DIR",
+  "BROWSER_SPEC",
+  "REAL_SPEC",
+  "STATE_FILE",
+  "LOCK_FILE",
+  "JOB_LOG",
+  "KEEP_RUNS",
+  "pathsOutsideScope",
+  "featureSubjects",
+  "forkOnlySubjects",
+  "supersededBy",
+  "withoutTrailers",
+  "dropFromTodo",
+  "liveIsOpen",
+  "notaryOutside",
+  "notaryRefused",
+  "notaryRefusal",
+  "holdForNotary",
+  "shouldSkipCandidate",
+  "countFailure",
+  "shellLine",
+  "StepFailure",
+  "HostAway",
+  "NotaryRefused",
+  "parseArgs",
+  "now",
+  "log",
+  "readState",
+  "writeAtomically",
+  "writeState",
+  "acquireLock",
+  "git",
+  "gh",
+  "rebaseInProgress",
+  "poll",
+  "commitSubjects",
+  "forkOnlyCommits",
+  "supersededCommits",
+  "upstreamPull",
+  "pullInRelease",
+  "upstreamPullsLanded",
+  "closedPulls",
+  "gateSteps",
+  "retriedPasses",
+  "gate",
+  "branchSpecs",
+  "checkScope",
+  "ssh",
+  "hostAnswers",
+  "withHost",
+  "pickBuildHost",
+  "hostRun",
+  "rsync",
+  "dropArtifacts",
+  "shellQuote",
+  "deliverArgs",
+  "notify",
+  "queueNotice",
+  "deliverNotices",
+  "tail",
+  "CONFLICT_AGENT_TOOLS",
+  "conflictPrompt",
+  "unmergedFiles",
+  "stageResolved",
+  "conflictAgentArgs",
+  "conflictAgent",
+  "resolveConflicts",
+  "KEPT_REBASE_FILE",
+  "KEPT_REBASE_REF",
+  "readKeptRebase",
+  "writeKeptRebase",
+  "isAncestor",
+  "keptRebase",
+  "rebaseOnto",
+  "leaveStoppedRebase",
+  "keepUpToStop",
+  "pruneRuns",
+  "retireLaunchAgent",
+  "work",
+  "failureNotice",
+  "releaseKey",
+  "releaseNotices",
+  "DONE",
+  "settle",
+  "settleNotes",
+  "flushPendingNotices",
+  "noticeClosedPulls",
+  "tryWork",
+  "logPlan",
+  "runOnce",
+  "main",
 ]);
 const LABEL = "com.alma.paseo-fork-release";
 // The build Mac runs electron-builder with this hook, which writes the signing plan sincoder
@@ -339,9 +407,11 @@ export function topLevelParts(text) {
 }
 
 /**
- * What of the app changes between two texts of release.mjs: each of APP_PARTS whose text differs
- * or that one of them lacks, and each top-level statement other than a declaration that is not in
- * both. Empty when only the job's own parts changed.
+ * What of the app changes between two texts of release.mjs: each part outside TOOLS_PARTS whose
+ * text differs or that one of them lacks, and each top-level statement other than a declaration
+ * that is not in both. Empty when only the job's own parts changed. A name joins TOOLS_PARTS only
+ * as a new part: listing one the earlier text already declared would let its change pass by
+ * the very commit that makes it.
  */
 export function appChanges(before, after) {
   const old = topLevelParts(before);
@@ -356,19 +426,22 @@ export function appChanges(before, after) {
       .some((name) => name && !parts.has(name));
   });
   if (misread) return ["release.mjs, read as a whole"];
+  const listed = (parts) =>
+    [...(parts.get("TOOLS_PARTS") ?? "").matchAll(/^\s+"([\w$]+)",?$/gm)].map((match) => match[1]);
+  const tools = new Set([...listed(old), ...listed(next).filter((name) => !old.has(name))]);
   const changed = [];
   for (const key of new Set([...old.keys(), ...next.keys()])) {
-    if (old.get(key) === next.get(key)) continue;
+    if (key === "TOOLS_PARTS" || old.get(key) === next.get(key)) continue;
     if (key.startsWith("statement: ")) changed.push(key.split("\n")[0]);
-    else if (APP_PARTS.has(key)) changed.push(key);
+    else if (!tools.has(key)) changed.push(key);
   }
   return changed;
 }
 
 /**
  * Whether branch head `to` ships the app the published commit `from` shipped: every file changed
- * between the two is one of TOOLS_FILES, and release.mjs, when it is one, changes none of its
- * APP_PARTS. A head that does runs the gate only (decide). Whatever git cannot answer, an unknown
+ * between the two is one of TOOLS_FILES, and release.mjs, when it is one, changes only its
+ * TOOLS_PARTS. A head that does runs the gate only (decide). Whatever git cannot answer, an unknown
  * commit included, counts as a change.
  */
 export function onlyToolsChanged(from, to, { runDir, cwd = BUILD } = {}) {
@@ -2021,7 +2094,7 @@ function work({ ctx, options, plan, runDir }) {
   }
   checkScope(ctx.latestTag, { runDir });
   const checks = { specs: branchSpecs(ctx.latestTag, { runDir }) };
-  // A replay without a superseded commit makes a new app, whatever the head changed.
+  // A replay that leaves out a superseded commit makes a new app, whatever the head changed.
   const gateOnly = plan === "gate" && !rebasing;
   release({ ctx, options, runDir, features, checks, gateOnly });
   return gateOnly ? "gated" : "published";
