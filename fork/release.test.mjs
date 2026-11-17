@@ -6,7 +6,6 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
-  APP_PARTS,
   appChanges,
   branchSpecs,
   buildArgs,
@@ -49,6 +48,7 @@ import {
   shouldSkipCandidate,
   stageResolved,
   supersededBy,
+  TOOLS_PARTS,
   topLevelParts,
   withoutTrailers,
 } from "./release.mjs";
@@ -102,7 +102,7 @@ function jobWith(from, to, text = JOB) {
   return text.replace(from, to);
 }
 
-test("release.mjs reads as its declarations, every app part one of them", () => {
+test("release.mjs reads as its declarations, every one of the job's own parts one of them", () => {
   const parts = topLevelParts(JOB);
   const declared = [...JOB.matchAll(/^(?:export )?(?:async )?(?:function|const|class) (\w+)/gm)];
   assert.deepEqual(
@@ -110,7 +110,7 @@ test("release.mjs reads as its declarations, every app part one of them", () => 
     [],
   );
   assert.deepEqual(
-    [...APP_PARTS].filter((name) => !parts.has(name)),
+    [...TOOLS_PARTS].filter((name) => !parts.has(name)),
     [],
   );
   // the conflict prompt's lines in column 0 stay in its template literal
@@ -142,6 +142,27 @@ test("a change to the job's own parts or comments changes no app, one to its bui
   // an app part renamed away is a change too
   const renamed = jobWith("function feedConfig(owner) {", "function updateFeed(owner) {");
   assert.ok(appChanges(JOB, renamed).includes("feedConfig"));
+  // the build host's environment is the app's
+  const env = jobWith("LANG=en_US.UTF-8", "LANG=C");
+  assert.deepEqual(appChanges(JOB, env), ["runHostPhase"]);
+});
+
+test("a new part is the app's until the job lists it, and listing an old part lets no change pass", () => {
+  const helper = jobWith(
+    "function gate({ runDir, env, specs }) {",
+    "function gateHelper() {\n  return 1;\n}\n\nfunction gate({ runDir, env, specs }) {",
+  );
+  assert.deepEqual(appChanges(JOB, helper), ["gateHelper"]);
+  const list = "export const TOOLS_PARTS = new Set([";
+  assert.deepEqual(appChanges(JOB, jobWith(list, `${list}\n  "gateHelper",`, helper)), []);
+  const feed = jobWith(`"-c.publish.channel=latest"`, `"-c.publish.channel=beta"`);
+  assert.deepEqual(appChanges(JOB, jobWith(list, `${list}\n  "feedConfig",`, feed)), [
+    "feedConfig",
+  ]);
+  // once listed in the published text, a part is the job's own
+  const listed = jobWith(list, `${list}\n  "gateHelper",`, helper);
+  const changedHelper = jobWith("  return 1;\n}\n\nfunction gate(", "  return 2;\n}\n\nfunction gate(", listed);
+  assert.deepEqual(appChanges(listed, changedHelper), []);
 });
 
 test("a backtick outside a template literal makes release.mjs a change as a whole", () => {
