@@ -777,7 +777,7 @@ test("a rebase the agent resolved is kept, so the next run ports only the commit
 });
 
 test("a kept rebase leaves out the same superseded commits, and a changed set ports afresh", (t) => {
-  const superseded = "packages/app/src/superseded.ts";
+  const [superseded, later] = ["packages/app/src/superseded.ts", "packages/app/src/later.ts"];
   const { repo, rev, show, agentRuns, rebase } = keptRebaseRepo(t, ({ write, commit }) => {
     write(FIRST, "the fork's a\n");
     commit("feat(app): the fork's a");
@@ -785,27 +785,31 @@ test("a kept rebase leaves out the same superseded commits, and a changed set po
     commit("feat(app): a feature upstream replaced");
     write(SECOND, "the fork's b\n");
     commit("feat(app): the fork's b");
+    write(later, "a later feature upstream replaced\n");
+    commit("feat(app): a later feature upstream replaced");
   });
-  const drop = [rev("fork~1")];
+  const drop = [rev("fork~2"), rev("fork")];
   const portA = { [FIRST]: "the port of a" };
   const ports = { ...portA, [SECOND]: "the port of b" };
 
-  // Try 1 drops the superseded commit and stops on b: the kept part runs through it, left out.
+  // Try 1 drops the first superseded commit and stops on b: the kept part runs through it.
   assert.ok(rebase({ ports: portA, drop }).conflict);
-  assert.deepEqual(readKeptRebase(repo).drop, drop);
-  assert.equal(readKeptRebase(repo).source, rev("fork~1"));
+  assert.deepEqual(readKeptRebase(repo).drop, [rev("fork~2")]);
+  assert.equal(readKeptRebase(repo).source, rev("fork~2"));
 
-  // Try 2, the same commit superseded: only b is ported, through the todo editor of -i.
+  // Try 2, the same commits superseded: only b is ported, and the replay's todo drops the later.
   assert.deepEqual(rebase({ ports, drop }), { resolvedBy: "agent" });
   assert.deepEqual(agentRuns(), [FIRST, SECOND, SECOND]);
   assert.equal(show("HEAD", FIRST), "the port of a 1\n");
   assert.equal(show("HEAD", SECOND), "the port of b 3\n");
   assert.equal(show("HEAD", superseded), "");
+  assert.equal(show("HEAD", later), "");
 
   // Try 3, the commit no longer superseded: the kept rebase does not hold, and both are ported.
   rebase({ ports });
   assert.equal(agentRuns().length, 5);
   assert.equal(show("HEAD", superseded), "a feature upstream replaced\n");
+  assert.equal(show("HEAD", later), "a later feature upstream replaced\n");
   assert.deepEqual(readKeptRebase(repo).drop, []);
 });
 
