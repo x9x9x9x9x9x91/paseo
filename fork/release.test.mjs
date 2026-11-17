@@ -9,6 +9,7 @@ import {
   branchSpecs,
   buildArgs,
   checkoutCandidate,
+  checkScope,
   closedPulls,
   CONFLICT_AGENT_TOOLS,
   compareStableTags,
@@ -178,6 +179,19 @@ test("a branch that changes the app with no browser spec fails, one that leaves 
   write("packages/server/src/server/session.ts", "a server change\n");
   commit("fix(server): a server change");
   assert.deepEqual(branchSpecs("v0.11.4", { cwd: repo }), []);
+});
+
+test("the scope step reads a non-ASCII path whole, in the app or outside it", (t) => {
+  const { repo, write, commit } = upstreamRepo(t);
+  write("packages/app/src/caf\u00e9.tsx", "an app file git would quote\n");
+  commit("feat(app): a feature");
+  assert.doesNotThrow(() => checkScope("v0.11.4", { cwd: repo }));
+  write("packages/server/src/s\u00fc\u00df.ts", "a server file git would quote\n");
+  commit("fix(server): a server change");
+  assert.throws(
+    () => checkScope("v0.11.4", { cwd: repo }),
+    (error) => error.message.endsWith(": packages/server/src/s\u00fc\u00df.ts"),
+  );
 });
 
 test("a feature whose Upstream trailer is none is fork-only", () => {
