@@ -182,6 +182,20 @@ test("a branch that changes the app with no browser spec fails, one that leaves 
 });
 
 test("the scope step reads a non-ASCII path whole, in the app or outside it", (t) => {
+  // git's default, set over any global config, so the old quoted read would fail here.
+  const pinned = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.quotePath",
+    GIT_CONFIG_VALUE_0: "true",
+  };
+  const saved = Object.fromEntries(Object.keys(pinned).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, pinned);
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
   const { repo, write, commit } = upstreamRepo(t);
   write("packages/app/src/caf\u00e9.tsx", "an app file git would quote\n");
   commit("feat(app): a feature");
@@ -191,6 +205,20 @@ test("the scope step reads a non-ASCII path whole, in the app or outside it", (t
   assert.throws(
     () => checkScope("v0.11.4", { cwd: repo }),
     (error) => error.message.endsWith(": packages/server/src/s\u00fc\u00df.ts"),
+  );
+});
+
+test("the scope step names the path a file moved into the app left", (t) => {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  write("packages/server/src/server/session.ts", "upstream's server code\n");
+  commit("upstream's server");
+  git("tag", "v0.11.5");
+  mkdirSync(path.join(repo, "packages/app/src"), { recursive: true });
+  git("mv", "packages/server/src/server/session.ts", "packages/app/src/session.ts");
+  commit("feat(app): the server's session, moved into the app");
+  assert.throws(
+    () => checkScope("v0.11.5", { cwd: repo }),
+    (error) => error.message.endsWith(": packages/server/src/server/session.ts"),
   );
 });
 
