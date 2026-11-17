@@ -676,7 +676,13 @@ const rebased = rebaseOnto({ newBase: "v0.11.5", oldBase: "v0.11.4", head, drop,
 process.stdout.write("\\n" + JSON.stringify(rebased) + "\\n");
 `;
 
-test("a rebase the agent resolved is kept, so the next run ports only the commits after it", (t) => {
+const [FIRST, SECOND] = ["packages/app/src/a.ts", "packages/app/src/b.ts"];
+
+/**
+ * A clone where upstream v0.11.5 changes a.ts and b.ts after v0.11.4, the fork branch `fork` as
+ * `forkCommits` builds it on v0.11.4, and `rebase`, one run's rebaseOnto in REBASE_RUN.
+ */
+function keptRebaseRepo(t, forkCommits) {
   const { repo, git, write, commit } = upstreamRepo(t);
   const root = mkdtempSync(path.join(os.tmpdir(), "fork-root-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -695,35 +701,42 @@ test("a rebase the agent resolved is kept, so the next run ports only the commit
   ]) {
     git("config", key, value);
   }
-  const [first, second] = ["packages/app/src/a.ts", "packages/app/src/b.ts"];
-  write(first, "upstream's a\n");
-  write(second, "upstream's b\n");
+  write(FIRST, "upstream's a\n");
+  write(SECOND, "upstream's b\n");
   commit("upstream's files");
   git("tag", "-f", "v0.11.4");
   git("checkout", "-q", "-b", "fork");
-  write(first, "the fork's a\n");
-  commit("feat(app): the fork's a");
-  write(second, "the fork's b\n");
-  commit("feat(app): the fork's b");
+  forkCommits({ git, write, commit });
   git("checkout", "-q", "-b", "upstream", "v0.11.4");
-  write(first, "upstream's next a\n");
-  write(second, "upstream's next b\n");
+  write(FIRST, "upstream's next a\n");
+  write(SECOND, "upstream's next b\n");
   commit("upstream's next release");
   git("tag", "v0.11.5");
   git("checkout", "-q", "fork");
-  const rebase = ({ head = rev("fork"), ports }) => {
+  const rebase = ({ head = rev("fork"), ports, drop = [] }) => {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", REBASE_RUN], {
       encoding: "utf8",
       env: {
         ...process.env,
         PASEO_FORK_ROOT: root,
         JOB_URL: new URL("./release.mjs", import.meta.url).href,
-        RUN: JSON.stringify({ cwd: repo, head, drop: [], ports, calls }),
+        RUN: JSON.stringify({ cwd: repo, head, drop, ports, calls }),
       },
     });
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout.trim().split("\n").at(-1));
   };
+  return { repo, git, write, commit, rev, show, agentRuns, rebase };
+}
+
+test("a rebase the agent resolved is kept, so the next run ports only the commits after it", (t) => {
+  const [first, second] = [FIRST, SECOND];
+  const { repo, git, write, commit, rev, show, agentRuns, rebase } = keptRebaseRepo(t, (fork) => {
+    fork.write(FIRST, "the fork's a\n");
+    fork.commit("feat(app): the fork's a");
+    fork.write(SECOND, "the fork's b\n");
+    fork.commit("feat(app): the fork's b");
+  });
 
   // Try 1: the agent ports a, then cannot port b. The port of a is kept.
   const portA = { [first]: "the port of a" };
@@ -761,6 +774,59 @@ test("a rebase the agent resolved is kept, so the next run ports only the commit
   rebase({ ports });
   assert.equal(agentRuns().length, 5);
   assert.equal(show("HEAD", first), "the port of a 4\n");
+});
+
+test("a kept rebase leaves out the same superseded commits, and a changed set ports afresh", (t) => {
+  const superseded = "packages/app/src/superseded.ts";
+  const { repo, rev, show, agentRuns, rebase } = keptRebaseRepo(t, ({ write, commit }) => {
+    write(FIRST, "the fork's a\n");
+    commit("feat(app): the fork's a");
+    write(superseded, "a feature upstream replaced\n");
+    commit("feat(app): a feature upstream replaced");
+    write(SECOND, "the fork's b\n");
+    commit("feat(app): the fork's b");
+  });
+  const drop = [rev("fork~1")];
+  const portA = { [FIRST]: "the port of a" };
+  const ports = { ...portA, [SECOND]: "the port of b" };
+
+  // Try 1 drops the superseded commit and stops on b: the kept part runs through it, left out.
+  assert.ok(rebase({ ports: portA, drop }).conflict);
+  assert.deepEqual(readKeptRebase(repo).drop, drop);
+  assert.equal(readKeptRebase(repo).source, rev("fork~1"));
+
+  // Try 2, the same commit superseded: only b is ported, through the todo editor of -i.
+  assert.deepEqual(rebase({ ports, drop }), { resolvedBy: "agent" });
+  assert.deepEqual(agentRuns(), [FIRST, SECOND, SECOND]);
+  assert.equal(show("HEAD", FIRST), "the port of a 1\n");
+  assert.equal(show("HEAD", SECOND), "the port of b 3\n");
+  assert.equal(show("HEAD", superseded), "");
+
+  // Try 3, the commit no longer superseded: the kept rebase does not hold, and both are ported.
+  rebase({ ports });
+  assert.equal(agentRuns().length, 5);
+  assert.equal(show("HEAD", superseded), "a feature upstream replaced\n");
+  assert.deepEqual(readKeptRebase(repo).drop, []);
+});
+
+test("a branch with a merge keeps no part of a stopped rebase, and keeps a whole one", (t) => {
+  const { repo, rev, agentRuns, rebase } = keptRebaseRepo(t, ({ git, write, commit }) => {
+    git("checkout", "-q", "-b", "side");
+    write("fork/side.mjs", "a side branch\n");
+    commit("fork: a side branch");
+    git("checkout", "-q", "fork");
+    write("fork/main.mjs", "the branch\n");
+    commit("fork: the branch");
+    git("merge", "-q", "--no-ff", "-m", "fork: merge the side branch", "side");
+    write(SECOND, "the fork's b\n");
+    commit("feat(app): the fork's b");
+  });
+  // The stop on b comes after the replayed commits, whose order a merge leaves to git.
+  assert.ok(rebase({ ports: {} }).conflict);
+  assert.equal(agentRuns().length, 1);
+  assert.equal(readKeptRebase(repo), null);
+  assert.deepEqual(rebase({ ports: { [SECOND]: "the port of b" } }), { resolvedBy: "agent" });
+  assert.equal(readKeptRebase(repo).source, rev("fork"));
 });
 
 test("the conflict agent may git rm a file upstream deleted, and its prompt says to", () => {
