@@ -730,9 +730,14 @@ export function branchSpecs(tag, { runDir, cwd } = {}) {
   return specs;
 }
 
-/** Fails when the branch changes a file on `tag` that is not the fork's to change. */
-function checkScope(tag, runDir) {
-  const changed = git(["diff", "--name-only", tag, "HEAD"], { runDir }).split("\n").filter(Boolean);
+/**
+ * Fails when the branch changes a file on `tag` that is not the fork's to change. The paths are
+ * read with -z, since git quotes a non-ASCII one and the quote fails every allowed path (ALM-4579).
+ */
+export function checkScope(tag, { runDir, cwd } = {}) {
+  const changed = git(["diff", "--name-only", "-z", tag, "HEAD"], { runDir, cwd })
+    .split("\0")
+    .filter(Boolean);
   const outside = pathsOutsideScope(changed);
   if (outside.length > 0) {
     throw new StepFailure(
@@ -1662,7 +1667,7 @@ function work({ ctx, options, plan, runDir }) {
     // The rebase dropped every feature commit as already upstream: the same as a merged pull.
     return retire({ ctx, options, runDir, reason: `no feature commit left on ${ctx.latestTag}` });
   }
-  checkScope(ctx.latestTag, runDir);
+  checkScope(ctx.latestTag, { runDir });
   const checks = { specs: branchSpecs(ctx.latestTag, { runDir }) };
   release({ ctx, options, runDir, features, checks });
   return "published";
