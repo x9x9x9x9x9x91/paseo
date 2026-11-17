@@ -25,6 +25,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { designatedRequirement } from "./sign-mac.cjs";
 
 export const FORK_REPO = "x9x9x9x9x9x91/paseo";
@@ -683,9 +684,8 @@ function runSteps(steps, { runDir, env }) {
 /**
  * The checks the build host runs before the build, in order. The app's unit tests try a failed
  * test once more (vitest's `--retry=1`), so one upstream timing flake does not fail a run while a
- * test that fails twice still does (ALM-4585). The e2e step runs the specs `specs` names, and none
- * when it is empty: without a spec named, the step would run every one of upstream's, and none
- * comes back only for a branch that leaves the app alone (branchSpecs).
+ * test that fails twice still does (ALM-4585); the verbose reporter marks each test that needed
+ * its retry, for retriedPasses.
  */
 export function gateSteps(specs) {
   const steps = [
@@ -697,18 +697,42 @@ export function gateSteps(specs) {
     ["build-server", "npm", ["run", "build:server"]],
     ["typecheck", "npm", ["run", "typecheck"]],
     ["app-deps", "npm", ["run", "build:app-deps"]],
-    ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1"]],
+    [
+      "app-unit",
+      "npm",
+      ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
+    ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
   ];
+  // Without a spec named, the step would run every one of upstream's. None comes back only for
+  // a branch that leaves the app alone (branchSpecs).
   if (specs.length > 0) {
     steps.push(["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...specs]]);
   }
   return steps;
 }
 
+/**
+ * The tests in the app-unit step's log that passed only on their retry, as vitest's verbose
+ * reporter names them (`✓ <project> <file>:<line>:<col> > <test> (retry x1)`), so a test that
+ * starts to flake is named in the run's log rather than passing unseen (ALM-4585).
+ */
+export function retriedPasses(stepLog) {
+  return stripVTControlCharacters(stepLog)
+    .split("\n")
+    .filter((line) => /^\s*✓ /.test(line) && /\(retry x\d+\)/.test(line))
+    .map((line) => line.replace(/^\s*✓\s+/, "").trim());
+}
+
 function gate({ runDir, env, specs }) {
   if (specs.length === 0) log("  e2e skipped: the branch does not change the app");
-  runSteps(gateSteps(specs), { runDir, env });
+  for (const step of gateSteps(specs)) {
+    runSteps([step], { runDir, env });
+    if (step[0] !== "app-unit") continue;
+    for (const test of retriedPasses(readFileSync(path.join(runDir, "app-unit.log"), "utf8"))) {
+      log(`  app-unit passed on its retry: ${test}`);
+    }
+  }
 }
 
 /**
