@@ -680,7 +680,14 @@ function runSteps(steps, { runDir, env }) {
   }
 }
 
-function gate({ runDir, env, specs }) {
+/**
+ * The checks the build host runs before the build, in order. The app's unit tests try a failed
+ * test once more (vitest's `--retry=1`), so one upstream timing flake does not fail a run while a
+ * test that fails twice still does (ALM-4585). The e2e step runs the specs `specs` names, and none
+ * when it is empty: without a spec named, the step would run every one of upstream's, and none
+ * comes back only for a branch that leaves the app alone (branchSpecs).
+ */
+export function gateSteps(specs) {
   const steps = [
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
     ["playwright", "npx", ["playwright", "install", "chromium"]],
@@ -690,21 +697,18 @@ function gate({ runDir, env, specs }) {
     ["build-server", "npm", ["run", "build:server"]],
     ["typecheck", "npm", ["run", "typecheck"]],
     ["app-deps", "npm", ["run", "build:app-deps"]],
-    ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app"]],
+    ["app-unit", "npm", ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1"]],
+    ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
   ];
-  steps.push([
-    "two-way-audio",
-    "npm",
-    ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"],
-  ]);
-  // Without a spec named, the step would run every one of upstream's. None comes back only for
-  // a branch that leaves the app alone (branchSpecs).
   if (specs.length > 0) {
     steps.push(["e2e", "npm", ["run", "test:e2e", "--workspace=@getpaseo/app", "--", ...specs]]);
-  } else {
-    log("  e2e skipped: the branch does not change the app");
   }
-  runSteps(steps, { runDir, env });
+  return steps;
+}
+
+function gate({ runDir, env, specs }) {
+  if (specs.length === 0) log("  e2e skipped: the branch does not change the app");
+  runSteps(gateSteps(specs), { runDir, env });
 }
 
 /**
