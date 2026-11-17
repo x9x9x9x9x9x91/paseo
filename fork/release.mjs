@@ -2424,7 +2424,8 @@ function runOnce(options, state) {
       writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
     return 0;
   }
-  if (!options.dryRun && liveIsOpen()) {
+  // A gate-only run signs and notarizes nothing here, so it need not wait for Live.
+  if (!options.dryRun && plan !== "gate" && liveIsOpen()) {
     // Nothing counted and nothing failed: the same candidate is tried the next hour.
     rmSync(runDir, { recursive: true, force: true });
     log(`Ableton Live is open; ${ctx.candidate} waits for an hour without it`);
