@@ -54,6 +54,64 @@ const ALLOWED_PATHS = [
   /^packages\/desktop\/e2e\/packaged-app-smoke\.js$/,
   /^fork\//,
 ];
+// The release job's own files, none of the app: a head that changes only these since the
+// published release ships that same app, so it runs the gate only (onlyToolsChanged, ALM-4638).
+// sign-mac.cjs signs the app, so it is not one of them.
+const JOB_FILE = "fork/release.mjs";
+const TOOLS_FILES = new Set([
+  "fork/README.md",
+  JOB_FILE,
+  "fork/release.test.mjs",
+  "fork/install.sh",
+  "fork/com.alma.paseo-fork-release.plist",
+]);
+// The parts of release.mjs that make the app or its release: its version, Node, install, build,
+// update feed, signing, notarizing, packing, verifying and publishing. A change to one of them,
+// to a top-level statement that is no named declaration (an import, the entry point) or to a part
+// that comes or goes under one of these names changes the app (appChanges).
+export const APP_PARTS = new Set([
+  "FORK_REPO",
+  "UPSTREAM_REPO",
+  "TOOLS",
+  "SIGN_HOOK",
+  "NOTARY_PROFILE",
+  "APP_ARCHIVE",
+  "SIGN_PLAN",
+  "SIGNED_ARCHIVE",
+  "SIGNER",
+  "DESKTOP",
+  "RELEASE_DIR",
+  "BUILT_APP",
+  "forkVersion",
+  "nextForkNumber",
+  "nodeMajorFromWorkflow",
+  "nodeMajor",
+  "nodeEnv",
+  "PREPARE_STEPS",
+  "runSteps",
+  "checkoutCandidate",
+  "prepareHost",
+  "hostPhase",
+  "feedConfig",
+  "withDesktopVersion",
+  "buildArgs",
+  "buildApp",
+  "ensureSigner",
+  "notarize",
+  "signHere",
+  "packageApp",
+  "verifyManifest",
+  "verifyApp",
+  "sameRequirement",
+  "releaseFileNames",
+  "releaseFilesProblem",
+  "checkRelease",
+  "publish",
+  "releaseNotes",
+  "handoverNotes",
+  "release",
+  "retire",
+]);
 const LABEL = "com.alma.paseo-fork-release";
 // The build Mac runs electron-builder with this hook, which writes the signing plan sincoder
 // signs from (sign-mac.cjs), so the app accepts upstream's signature too.
@@ -220,14 +278,111 @@ export function dropFromTodo(todo, drop) {
 
 /**
  * What a run has to do: `rebase` onto a newer upstream release, `release` a branch head the
- * fork has not published yet, or nothing (`current`). A branch ahead of upstream's latest
- * release (upstream took a release back) waits for upstream to catch up.
+ * fork has not published yet, `gate` one that changes only the release job's own files since the
+ * published release (`toolsOnly`, onlyToolsChanged), or nothing (`current`), a head the gate
+ * passed (`gatedCommit`) included. A gate-only run checks and builds the app on the build host
+ * and signs, notarizes and publishes nothing, since the app it would ship is the published one
+ * (ALM-4638). A branch ahead of upstream's latest release (upstream took a release back) waits for
+ * upstream to catch up.
  */
-export function decide({ latestTag, baseTag, head, publishedCommit }) {
+export function decide({
+  latestTag,
+  baseTag,
+  head,
+  publishedCommit,
+  gatedCommit = null,
+  toolsOnly = false,
+}) {
   const order = compareStableTags(latestTag, baseTag);
   if (order < 0) return "current";
   if (order > 0) return "rebase";
-  return publishedCommit === head ? "current" : "release";
+  if (publishedCommit === head || gatedCommit === head) return "current";
+  return toolsOnly ? "gate" : "release";
+}
+
+const DECLARATION =
+  /^(?:export\s+)?(?:(?:async\s+)?function\*?\s+|(?:const|let|var|class)\s+)([A-Za-z_$][\w$]*)/;
+
+/**
+ * release.mjs's top-level parts as oxfmt lays them out: a part starts at a line in column 0 and
+ * runs to the next one, its closing brackets and a template literal's lines included. A
+ * declaration is keyed by its name, any other statement by its text; comments and blank lines
+ * outside a template literal are left out, since they change no run.
+ */
+export function topLevelParts(text) {
+  const parts = new Map();
+  let current = null;
+  let inTemplate = false;
+  for (const line of text.split("\n")) {
+    if (inTemplate) {
+      current?.push(line);
+    } else if (line.trim() === "") {
+      // a blank line changes nothing
+    } else if (/^[\s)\]}]/.test(line)) {
+      current?.push(line);
+    } else if (/^(\/\/|\/\*)/.test(line)) {
+      current = null;
+    } else {
+      current = [line];
+      const name = DECLARATION.exec(line)?.[1];
+      parts.set(name ?? `statement ${parts.size}`, current);
+    }
+    const ticks = line.match(/(?<!\\)\x60/g)?.length ?? 0;
+    if (ticks % 2 === 1) inTemplate = !inTemplate;
+  }
+  const keyed = new Map();
+  for (const [key, lines] of parts) {
+    const body = lines.join("\n");
+    keyed.set(key.startsWith("statement ") ? `statement: ${body}` : key, body);
+  }
+  return keyed;
+}
+
+/**
+ * What of the app changes between two texts of release.mjs: each of APP_PARTS whose text differs
+ * or that one of them lacks, and each top-level statement other than a declaration that is not in
+ * both. Empty when only the job's own parts changed.
+ */
+export function appChanges(before, after) {
+  const old = topLevelParts(before);
+  const next = topLevelParts(after);
+  // A layout the parts misread (a backtick outside a template literal) would fold a later part
+  // into an earlier one, so a text whose declarations are not all parts counts as changed.
+  const misread = [before, after].some((text, index) => {
+    const parts = index === 0 ? old : next;
+    return text
+      .split("\n")
+      .map((line) => DECLARATION.exec(line)?.[1])
+      .some((name) => name && !parts.has(name));
+  });
+  if (misread) return ["release.mjs, read as a whole"];
+  const changed = [];
+  for (const key of new Set([...old.keys(), ...next.keys()])) {
+    if (old.get(key) === next.get(key)) continue;
+    if (key.startsWith("statement: ")) changed.push(key.split("\n")[0]);
+    else if (APP_PARTS.has(key)) changed.push(key);
+  }
+  return changed;
+}
+
+/**
+ * Whether branch head `to` ships the app the published commit `from` shipped: every file changed
+ * between the two is one of TOOLS_FILES, and release.mjs, when it is one, changes none of its
+ * APP_PARTS. A head that does runs the gate only (decide). Whatever git cannot answer, an unknown
+ * commit included, counts as a change.
+ */
+export function onlyToolsChanged(from, to, { runDir, cwd = BUILD } = {}) {
+  if (!from || !to || from === to) return false;
+  const quiet = { runDir, cwd, quiet: true };
+  const diff = run("git", ["diff", "--name-only", "-z", "--no-renames", from, to, "--"], quiet);
+  if (diff.status !== 0) return false;
+  const files = diff.stdout.split("\0").filter(Boolean);
+  if (!files.every((file) => TOOLS_FILES.has(file))) return false;
+  if (!files.includes(JOB_FILE)) return true;
+  const before = run("git", ["show", `${from}:${JOB_FILE}`], quiet);
+  const after = run("git", ["show", `${to}:${JOB_FILE}`], quiet);
+  if (before.status !== 0 || after.status !== 0) return false;
+  return appChanges(before.stdout, after.stdout).length === 0;
 }
 
 /**
@@ -1706,12 +1861,22 @@ function retireLaunchAgent() {
  * Build, verify and publish the checked-out tree as the fork's next release. A `handover` is
  * the last one: upstream's own tag, updating from upstream's releases, with no `checks` (its
  * own release workflow ran them). The checks and the build run on a build host, the signing
- * and notarizing here, the packing there again, and the release files come back here.
+ * and notarizing here, the packing there again, and the release files come back here. A
+ * `gateOnly` run ends after the build host's checks and unsigned build: the head ships the
+ * published app, so nothing is signed, notarized or published (decide, ALM-4638).
  */
-function release({ ctx, options, runDir, features, checks = null, handover = false }) {
+function release({
+  ctx,
+  options,
+  runDir,
+  features,
+  checks = null,
+  handover = false,
+  gateOnly = false,
+}) {
   // A draft is what an earlier run of this job left when it died mid-publish.
   const ours = (entry) => /-fork\.\d+$/.test(entry.tag);
-  if (!options.dryRun) {
+  if (!options.dryRun && !gateOnly) {
     for (const draft of forkReleases(runDir).filter((entry) => entry.draft && ours(entry))) {
       gh(["api", "-X", "DELETE", `repos/${FORK_REPO}/releases/${draft.id}`], { runDir });
     }
@@ -1720,14 +1885,21 @@ function release({ ctx, options, runDir, features, checks = null, handover = fal
   ctx.version = forkVersion(ctx.latestTag, nextForkNumber(ctx.latestTag, tags));
   const owner = (handover ? UPSTREAM_REPO : FORK_REPO).split("/")[0];
   // Every build ends at notarize, so a refused profile stops it before the build host.
-  const refused = notaryRefusal();
+  const refused = gateOnly ? null : notaryRefusal();
   if (refused) throw new NotaryRefused(refused);
   ctx.host = pickBuildHost(runDir);
-  log(`  building ${ctx.version}${handover ? `, updating from ${owner}` : ""} on ${ctx.host}`);
+  let what = "";
+  if (gateOnly) what = ", the gate only";
+  else if (handover) what = `, updating from ${owner}`;
+  log(`  building ${ctx.version}${what} on ${ctx.host}`);
   const version = ctx.version;
   const job = { version, owner, nodeMajor: nodeMajor(ctx.latestTag, runDir), checks };
   prepareHost({ host: ctx.host, tag: ctx.latestTag, runDir, job });
   runHostPhase({ host: ctx.host, phase: "app", runDir, timeoutMs: 4 * 60 * 60_000 });
+  if (gateOnly) {
+    log(`  checked and built ${ctx.version} unsigned; the app stays ${ctx.publishedVersion}`);
+    return;
+  }
   signHere({ version, owner, runDir });
   const signed = path.join(runDir, SIGNED_ARCHIVE);
   withHost(ctx.host, runDir, () =>
@@ -1849,8 +2021,10 @@ function work({ ctx, options, plan, runDir }) {
   }
   checkScope(ctx.latestTag, { runDir });
   const checks = { specs: branchSpecs(ctx.latestTag, { runDir }) };
-  release({ ctx, options, runDir, features, checks });
-  return "published";
+  // A replay without a superseded commit makes a new app, whatever the head changed.
+  const gateOnly = plan === "gate" && !rebasing;
+  release({ ctx, options, runDir, features, checks, gateOnly });
+  return gateOnly ? "gated" : "published";
 }
 
 /**
@@ -1924,11 +2098,27 @@ export function releaseKey(tag) {
  * per attempt. `open` is the releases whose note is an open ask. A failure (`failed`, its
  * failureNotice) rewrites the built release's note and settles an older release's as a report;
  * a published or retired run rewrites each open note as a report that needs nobody, the built
- * release's saying what went out, a resolved conflict included. Returns the notices and the
- * releases left open.
+ * release's saying what went out, a resolved conflict included. A `gated` run rewrites only the
+ * built release's note, as a report that the app stays the published one, and leaves an older
+ * release's open. Returns the notices and the releases left open.
  */
-export function releaseNotices({ ctx, open = [], failed, runDir }) {
+export function releaseNotices({ ctx, open = [], failed, gated = false, runDir }) {
   const built = ctx.latestTag;
+  if (gated) {
+    const head = ctx.head.slice(0, 9);
+    const notices = open.includes(built)
+      ? [
+          {
+            level: "info",
+            standing: true,
+            key: releaseKey(built),
+            title: `Paseo fork: branch ${head} passed its checks, the app unchanged`,
+            body: `Branch ${head} on upstream ${built} changes only the release job's own files since ${ctx.publishedVersion}, so the job checked and built it and published nothing: your app stays on ${ctx.publishedVersion}, with no update to take.\n\nRun log: ${runDir} on sincoder.\n`,
+          },
+        ]
+      : [];
+    return { notices, open: open.filter((tag) => tag !== built) };
+  }
   const notices = open
     .filter((tag) => tag !== built)
     .map((tag) => ({
@@ -1961,6 +2151,9 @@ export function releaseNotices({ ctx, open = [], failed, runDir }) {
   return { notices, open: [] };
 }
 
+// The outcomes of a run that did what it had to.
+const DONE = new Set(["published", "retired", "gated"]);
+
 /** Record the run and tell Tim what needs him: a failure, a conflict, a retirement. */
 function settle({ outcome, error, ctx, state, runDir }) {
   const stamp = now();
@@ -1975,6 +2168,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
       at: stamp,
     };
     delete next.failure;
+    delete next.gated;
     settleNotes(next, releaseNotices({ ctx, open: state.openNotes, runDir }));
     for (const commit of ctx.superseded ?? []) {
       const pulls = commit.pulls.map((pull) => `https://github.com/${UPSTREAM_REPO}/pull/${pull}`);
@@ -1996,6 +2190,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
     };
     next.retired = { upstreamTag: ctx.latestTag, handover: ctx.version, at: stamp };
     delete next.failure;
+    delete next.gated;
     settleNotes(next, releaseNotices({ ctx, open: state.openNotes, runDir }));
     retireLaunchAgent();
     const handover = `https://github.com/${FORK_REPO}/releases/tag/${ctx.version}`;
@@ -2006,6 +2201,12 @@ function settle({ outcome, error, ctx, state, runDir }) {
       body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add. Its release job on sincoder published one last release, ${ctx.version}: upstream's ${ctx.latestTag}, signed by the fork so your app accepts it, and updating from upstream's releases. Your app installs it at its next update, then stock Paseo ${ctx.latestTag} at the one after, with nothing to do on your side; the daemon and your chats keep running. The job has stopped.\n\nLast release: ${handover}\n`,
     });
     log(`retired on ${ctx.latestTag} with ${ctx.version}`);
+  } else if (outcome === "gated") {
+    // The head the next run reads as current (decide), the published release left as it is.
+    next.gated = { commit: ctx.head, upstreamTag: ctx.latestTag, at: stamp };
+    delete next.failure;
+    settleNotes(next, releaseNotices({ ctx, open: state.openNotes, gated: true, runDir }));
+    log(`gated ${ctx.head.slice(0, 9)}: the app stays ${previous}`);
   } else if (error instanceof NotaryRefused) {
     Object.assign(next, holdForNotary(state, { ctx, refused: error.refused, at: stamp }));
     log(`held: Apple's notary refuses ${NOTARY_PROFILE}, so ${ctx.candidate} waits on Tim's step`);
@@ -2032,7 +2233,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
   }
   deliverNotices(next);
   writeState(next);
-  return outcome === "published" || outcome === "retired" ? 0 : 1;
+  return DONE.has(outcome) ? 0 : 1;
 }
 
 /** The release notes go out after whatever waits, and state keeps the releases left open. */
@@ -2100,6 +2301,29 @@ function tryWork({ ctx, options, plan, runDir }) {
   }
 }
 
+/**
+ * What this run does (decide): a head the gate passed is current, and --force or --retire makes
+ * a current or gate-only head a release.
+ */
+function planRun({ ctx, options, state, runDir }) {
+  ctx.gatedCommit = state.gated?.commit ?? null;
+  ctx.toolsOnly =
+    ctx.head !== ctx.gatedCommit && onlyToolsChanged(ctx.publishedCommit, ctx.head, { runDir });
+  const decided = decide(ctx);
+  const again = decided === "current" || decided === "gate";
+  return (options.force || options.retire) && again ? "release" : decided;
+}
+
+function logPlan(plan, { ctx, options }) {
+  const head = ctx.head.slice(0, 9);
+  if (options.retire) log(`rehearsing the handover on upstream ${ctx.latestTag}`);
+  else if (plan === "rebase")
+    log(`upstream ${ctx.latestTag} is out; the branch is on ${ctx.baseTag}`);
+  else if (plan === "gate")
+    log(`branch ${head} changes only the job's files since ${ctx.publishedVersion}; gate only`);
+  else log(`branch ${head} on ${ctx.baseTag} has no release yet`);
+}
+
 /** One run past the lock: poll, decide, and do the work if there is any. */
 function runOnce(options, state) {
   if (!existsSync(path.join(BUILD, ".git"))) {
@@ -2118,8 +2342,7 @@ function runOnce(options, state) {
   }
   noticeClosedPulls({ state, options, runDir });
   ctx.candidate = `${ctx.latestTag}@${ctx.head}`;
-  const decided = decide(ctx);
-  const plan = (options.force || options.retire) && decided === "current" ? "release" : decided;
+  const plan = planRun({ ctx, options, state, runDir });
   const skip = !options.dryRun && shouldSkipCandidate(state.failure, ctx.candidate);
   if (plan === "current" || skip) {
     rmSync(runDir, { recursive: true, force: true });
@@ -2135,17 +2358,14 @@ function runOnce(options, state) {
     writeState({ ...state, lastCheckAt: now(), latestUpstream: ctx.latestTag });
     return 0;
   }
-  if (options.retire) log(`rehearsing the handover on upstream ${ctx.latestTag}`);
-  else if (plan === "rebase")
-    log(`upstream ${ctx.latestTag} is out; the branch is on ${ctx.baseTag}`);
-  else log(`branch ${ctx.head.slice(0, 9)} on ${ctx.baseTag} has no release yet`);
+  logPlan(plan, { ctx, options });
   pruneRuns();
   const tried = tryWork({ ctx, options, plan, runDir });
   if (!tried) return 1;
   const { outcome, failure } = tried;
   if (options.dryRun) {
     log(`dry run: ${outcome}${failure ? ` at ${failure.step}: ${failure.message}` : ""}`);
-    return outcome === "published" || outcome === "retired" ? 0 : 1;
+    return DONE.has(outcome) ? 0 : 1;
   }
   return settle({ outcome, error: failure, ctx, state, runDir });
 }
