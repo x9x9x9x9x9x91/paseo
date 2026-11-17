@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // The fork's release job. Upstream's latest stable release plus this branch's own commits,
 // checked, built, signed, notarized and published as a GitHub release on the fork, so the
-// Mac app updates itself from there. It runs hourly on sincoder as a launch agent in the
-// logged-in session, the only place its login keychain (signing, notary profile) is unlocked.
-// sincoder is the main Mac, where nothing builds: the checks, the build and the packaged-app
-// smoke run on a test Mac over ssh (`--build-host`, the same file), and sincoder keeps what
-// needs its keys: git and GitHub, the conflict agent, signing, notarizing and publishing.
+// Mac app updates itself from there. It runs hourly on the signing Mac: on sincoder as a launch
+// agent in the logged-in session, whose keychain holds the Developer ID key and the notary
+// profile, or on mini1's agent account as a timed job that holds no key and has the release
+// account's program sign and notarize (RELEASE_PROGRAM, ALM-4279). Nothing builds on the signing
+// Mac: the checks, the build and the packaged-app smoke run on a test Mac over ssh
+// (`--build-host`, the same file), and the signing Mac keeps what needs its keys and logins: git
+// and GitHub, the conflict agent, signing, notarizing and publishing.
 // fork/README.md has the version scheme, the failure policy and the retirement path.
 import { spawnSync } from "node:child_process";
 import {
@@ -182,11 +184,24 @@ export const TOOLS_PARTS = new Set([
   "main",
 ]);
 const LABEL = "com.alma.paseo-fork-release";
-// The build Mac runs electron-builder with this hook, which writes the signing plan sincoder
-// signs from (sign-mac.cjs), so the app accepts upstream's signature too.
+// The build Mac runs electron-builder with this hook, which writes the signing plan the signing
+// Mac signs from (sign-mac.cjs), so the app accepts upstream's signature too.
 const TOOLS = path.dirname(fileURLToPath(import.meta.url));
 const SIGN_HOOK = path.join(TOOLS, "sign-mac.cjs");
 const NOTARY_PROFILE = process.env.PASEO_FORK_NOTARY_PROFILE ?? "substrate-notary";
+// Where the keys sit in an account of their own (mini1's release account, ALM-4593), the words
+// that run its program, split on whitespace: its `sign` takes the unsigned app with its plan and
+// hands it back signed, notarized and stapled, its `notary-check` asks the notary as
+// notaryRefusal does (ALM-4279). None where this Mac's own keychain signs (sincoder).
+export const RELEASE_PROGRAM = (process.env.PASEO_FORK_RELEASE_PROGRAM ?? "")
+  .split(/\s+/)
+  .filter(Boolean);
+// The release program's exit while another of its steps holds the account's keychain: the run is
+// tried again next hour and counts nothing, as a busy build host.
+const PROGRAM_BUSY = 75;
+// Where the job runs, as its notices name it for Tim and for Alma's night run, which reads the
+// run folder there: the Mac, or the account at the Mac when it is not the Mac's own (alma@mini1).
+export const HERE = process.env.PASEO_FORK_HERE ?? hereName();
 // Notices go through Alma's notification door on this Mac.
 const NOTIFY_SCRIPT =
   process.env.PASEO_FORK_NOTIFY_SCRIPT ??
@@ -196,7 +211,7 @@ const NOTIFY_SCRIPT =
 const STATE_COPY =
   process.env.PASEO_FORK_STATE_COPY ??
   path.join(os.homedir(), "Vault/Alma/Local/Task-State/paseo-fork/state.json");
-// The conflict agent talks to this Mac's model proxy: sincoder holds no login of its own.
+// The conflict agent talks to this Mac's model proxy: the signing Mac holds no login of its own.
 const PROXY_URL = process.env.PASEO_FORK_PROXY_URL ?? "http://127.0.0.1:8318";
 const AGENT_MODEL = "claude-opus-5-5";
 // The test Macs the checks and the build run on, the first that answers. Each takes the run
@@ -205,7 +220,7 @@ const AGENT_MODEL = "claude-opus-5-5";
 export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "mini2 mini3")
   .split(/[\s,]+/)
   .filter(Boolean);
-// The job's folder on a build host, relative to its home, as ROOT is on sincoder.
+// The job's folder on a build host, relative to its home, as ROOT is on the signing Mac.
 const HOST_ROOT = "Coding/_forks/paseo-release";
 const HOST_LOCK = ".local/bin/ns-with-max-lock";
 const HOST_PATH =
@@ -215,7 +230,7 @@ const HOST_REF = "refs/heads/fork-candidate";
 // ns-with-max-lock's "gave up waiting" and ssh's "could not connect": the host is busy or away,
 // which is not the candidate's failure.
 const HOST_AWAY = new Set([75, 255]);
-// The app and its signing plan as the build host leaves them, and the signed app sincoder sends back.
+// The app and its signing plan as the build host leaves them, and the signed app sent back to it.
 const APP_ARCHIVE = "unsigned-app.zip";
 const SIGN_PLAN = "sign-plan.json";
 const SIGNED_ARCHIVE = "signed-app.zip";
@@ -246,7 +261,7 @@ const STATE_FILE = path.join(ROOT, "state.json");
 const LOCK_FILE = path.join(ROOT, "lock");
 const RUNS = path.join(ROOT, "runs");
 const JOB_LOG = path.join(ROOT, "job.log");
-// sincoder's @electron/osx-sign, the version the build used (sign-mac.cjs).
+// The signing Mac's @electron/osx-sign, the version the build used (sign-mac.cjs).
 const SIGNER = path.join(ROOT, "signer");
 const KEEP_RUNS = 20;
 
@@ -459,6 +474,11 @@ export function onlyToolsChanged(from, to, { runDir, cwd = BUILD } = {}) {
   return appChanges(before.stdout, after.stdout).length === 0;
 }
 
+/** Where the job runs, for its notices: `host`, or `user@host` when the account is another's. */
+export function hereName(user = os.userInfo().username, host = os.hostname().split(".")[0]) {
+  return user === host ? host : `${user}@${host}`;
+}
+
 /**
  * Whether Ableton Live runs on this Mac: the main's music comes first, so a run with work to do
  * waits for an hour without Live (signing, notarizing and the conflict agent run here).
@@ -487,14 +507,40 @@ export function notaryRefused(output) {
  * job in, or when it is down or does not answer, which the notarize step itself retries
  * (ALM-4009).
  */
-export function notaryRefusal(spawn = spawnSync) {
-  const result = spawn(
-    "/usr/bin/xcrun",
-    ["notarytool", "history", "--keychain-profile", NOTARY_PROFILE],
-    { encoding: "utf8", timeout: 2 * 60_000 },
-  );
+export function notaryRefusal(spawn = spawnSync, program = RELEASE_PROGRAM) {
+  // the release program's notary-check runs the same history under its keychain's hold; its busy
+  // exit is no refusal, so the build goes ahead as when Apple does not answer
+  const [command, args] = program.length
+    ? [program[0], [...program.slice(1), "notary-check"]]
+    : ["/usr/bin/xcrun", ["notarytool", "history", "--keychain-profile", NOTARY_PROFILE]];
+  const result = spawn(command, args, { encoding: "utf8", timeout: 2 * 60_000 });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
   return result.status !== 0 && notaryRefused(output) ? output : null;
+}
+
+/**
+ * Tim's step and its ask when Apple's notary refuses the profile: a 403 is most often an Apple
+ * Developer agreement waiting for him, a 401 the stored login, an app-specific password on this
+ * Mac or the release account's App Store Connect key behind RELEASE_PROGRAM (ALM-4279).
+ */
+function notaryStep(refused, latestTag, program) {
+  const lets = `so Apple's notary lets ${NOTARY_PROFILE} in and the Paseo fork builds upstream ${latestTag}`;
+  if (/HTTP status code: 403\b/.test(refused)) {
+    return {
+      step: `sign in at developer.apple.com, Account, and accept the agreement it shows (Apple's answer below names what is missing); the stored login stays as it is`,
+      ask: `Accept the Apple Developer agreement at developer.apple.com, ${lets}`,
+    };
+  }
+  if (program.length) {
+    return {
+      step: `make a new App Store Connect key at appstoreconnect.apple.com (Users and Access, Integrations), take the old one out of mini1's release account and import the new one there, as docs/new-mac.md's step for Substrate's release account says (\`substrate-release import asc-key\`), which makes ${NOTARY_PROFILE} again`,
+      ask: `Import a new App Store Connect key into mini1's release account, ${lets}`,
+    };
+  }
+  return {
+    step: `make a new app-specific password at appleid.apple.com (Sign-In and Security, App-Specific Passwords), then in a terminal on ${HERE} run \`xcrun notarytool store-credentials ${NOTARY_PROFILE}\` and paste it at its hidden prompt, with the same Apple ID and team as before`,
+    ask: `Store a new app-specific password as ${NOTARY_PROFILE} on ${HERE}, so Apple's notary lets it in and the Paseo fork builds upstream ${latestTag}`,
+  };
 }
 
 /**
@@ -504,7 +550,7 @@ export function notaryRefusal(spawn = spawnSync) {
  * for the candidate, an ask that needs him, never an agent, as no agent can take his step; the
  * later hours leave it his (ALM-4009, ALM-4030).
  */
-export function holdForNotary(state, { ctx, refused, at }) {
+export function holdForNotary(state, { ctx, refused, at, program = RELEASE_PROGRAM }) {
   const previous = state.failure?.candidate === ctx.candidate ? state.failure : null;
   const failure = { ...previous, candidate: ctx.candidate, attempts: previous?.attempts ?? 0 };
   delete failure.outsideSince;
@@ -514,16 +560,10 @@ export function holdForNotary(state, { ctx, refused, at }) {
   const next = { ...state, lastCheckAt: at, latestUpstream: ctx.latestTag, failure };
   if (fresh) {
     const app = state.lastPublished?.version ?? "no fork release yet";
-    // A 401 is the password; a 403 most often an Apple Developer agreement waiting for him.
-    const agreement = /HTTP status code: 403\b/.test(refused);
-    const step = agreement
-      ? `sign in at developer.apple.com, Account, and accept the agreement it shows (Apple's answer below names what is missing); the stored password stays as it is`
-      : `make a new app-specific password at appleid.apple.com (Sign-In and Security, App-Specific Passwords), then in Terminal on sincoder run \`xcrun notarytool store-credentials ${NOTARY_PROFILE}\` and paste it at its hidden prompt, with the same Apple ID and team as before`;
+    const { step, ask } = notaryStep(refused, ctx.latestTag, program);
     const failed = {
       needs: "tim",
-      ask: agreement
-        ? `Accept the Apple Developer agreement at developer.apple.com, so Apple's notary lets ${NOTARY_PROFILE} in and the Paseo fork builds upstream ${ctx.latestTag}`
-        : `Store a new app-specific password as ${NOTARY_PROFILE} on sincoder, so Apple's notary lets it in and the Paseo fork builds upstream ${ctx.latestTag}`,
+      ask,
       title: `Paseo fork release waits on you: Apple's notary refuses ${NOTARY_PROFILE} (upstream ${ctx.latestTag})`,
       body: `Apple's notary refuses the stored notary profile ${NOTARY_PROFILE}, so the job builds nothing for upstream ${ctx.latestTag}: each hour it asks the notary again, and the first hour it is let in builds and publishes. The app stays on ${app}.\n\nYour step: ${step}.\n\nApple's answer:\n\n${refused}\n`,
     };
@@ -1033,11 +1073,11 @@ function withDesktopVersion(version, body) {
 /**
  * The build host's `npm run build:desktop` arguments: a zip target, not --dir, since
  * electron-builder writes the app's update feed (Contents/Resources/app-update.yml) only for a
- * dmg or zip target and it has to be in the app before sincoder seals it (the unsigned zip itself
- * is thrown away); the signing hook in place of signing; and the ad-hoc identity `-`, because
- * electron-builder 26.18.0 calls the hook only when it finds an identity, and the build host
- * holds none (ALM-4559). The plan the hook writes records no identity: sincoder signs as the
- * fork's (sign-mac.cjs).
+ * dmg or zip target and it has to be in the app before the signing Mac seals it (the unsigned
+ * zip itself is thrown away); the signing hook in place of signing; and the ad-hoc identity `-`,
+ * because electron-builder 26.18.0 calls the hook only when it finds an identity, and the build
+ * host holds none (ALM-4559). The plan the hook writes records no identity: the signing Mac signs
+ * as the fork's (sign-mac.cjs).
  */
 export function buildArgs(owner) {
   return [
@@ -1058,8 +1098,8 @@ export function buildArgs(owner) {
 
 /**
  * On the build host: the Mac app, versioned, updating from `owner`'s releases, and unsigned: the
- * signing hook writes the plan sincoder signs from instead (sign-mac.cjs, buildArgs). The app
- * goes into the run folder as an archive for sincoder to fetch.
+ * signing hook writes the plan the signing Mac signs from instead (sign-mac.cjs, buildArgs). The
+ * app goes into the run folder as an archive for the signing Mac to fetch.
  */
 function buildApp({ version, owner, runDir, env }) {
   rmSync(RELEASE_DIR, { recursive: true, force: true });
@@ -1086,8 +1126,9 @@ function buildApp({ version, owner, runDir, env }) {
 }
 
 /**
- * On the build host: the app sincoder signed replaces the unsigned one, passes the packaged-app
- * smoke, and becomes the release's zip, dmg, blockmaps and manifest, copied into the run folder.
+ * On the build host: the app the signing Mac signed replaces the unsigned one, passes the
+ * packaged-app smoke, and becomes the release's zip, dmg, blockmaps and manifest, copied into the
+ * run folder.
  */
 function packageApp({ version, owner, runDir, env }) {
   const app = BUILT_APP;
@@ -1367,7 +1408,7 @@ function dropArtifacts({ host, runDir }) {
   }
 }
 
-/** sincoder's @electron/osx-sign, at the version the build used. */
+/** The signing Mac's @electron/osx-sign, at the version the build used. */
 function ensureSigner(version, runDir) {
   const manifest = path.join(SIGNER, "package.json");
   const text = `${JSON.stringify({ private: true, dependencies: { "@electron/osx-sign": version } }, null, 2)}\n`;
@@ -1416,8 +1457,8 @@ function notarize({ app, runDir }) {
 }
 
 /**
- * On sincoder: the app the host built, signed from its plan with the osx-sign the build used,
- * notarized, stapled and checked, then archived for the host's packaging half.
+ * On the signing Mac: the app the host built, signed from its plan with the osx-sign the build
+ * used, notarized, stapled and checked, then archived for the host's packaging half.
  */
 function signHere({ version, owner, runDir }) {
   const step = "sign";
@@ -1445,8 +1486,104 @@ function signHere({ version, owner, runDir }) {
 }
 
 /**
- * On sincoder: the release files the host packed are all there, and the app in the zip, the one
- * electron-updater installs, is the app signed here.
+ * The release program's `sign` with the zip `sent` on its stdin and its stdout in `back`, its
+ * progress in `logFile`. Its busy exit (PROGRAM_BUSY) is HostAway, tried next hour. A failure is
+ * read from the program's own last words as sincoder's steps read theirs: Apple's Invalid or
+ * Rejected verdict is notarize's and the candidate's; Apple taking nothing with no verdict is
+ * notarize's and outside, unless `refusal` (notaryRefusal) finds the profile refused now, a hold
+ * for Tim's step (NotaryRefused), since the program drops notarytool's own error; a ticket that
+ * did not staple is notarize's and outside, as sincoder's stapler is; Gatekeeper or codesign
+ * refusing the signed app is verify's; the program's pinned osx-sign not the build's, said by the
+ * plan's own line anywhere in the log, is signer's, whose fix is the program's pin in Alma's repo;
+ * any other failure the sign step's (ALM-4279).
+ */
+export function signedBy({
+  program,
+  sent,
+  back,
+  logFile,
+  spawn = spawnSync,
+  refusal = notaryRefusal,
+}) {
+  appendFileSync(logFile, `$ ${program.join(" ")} sign < ${sent} > ${back}\n`);
+  const fds = [openSync(sent, "r"), openSync(back, "w"), openSync(logFile, "a")];
+  let result;
+  try {
+    result = spawn(program[0], [...program.slice(1), "sign"], {
+      stdio: fds,
+      timeout: 90 * 60_000,
+    });
+  } finally {
+    for (const fd of fds) closeSync(fd);
+  }
+  appendFileSync(logFile, `exit=${result.status}\n`);
+  if (result.status === PROGRAM_BUSY) {
+    throw new HostAway("the release program's keychain is held by another of its steps");
+  }
+  if (result.status === 0) return;
+  const said = readFileSync(logFile, "utf8");
+  const last = said.match(/^substrate-release: .*$/gm)?.at(-1) ?? "";
+  const why = `the release program did not sign the app (${result.error?.message ?? `exit ${result.status}`})${last ? `: ${last}` : ""}`;
+  if (/Apple did not accept/.test(last)) {
+    if (/"status" *: *"(Invalid|Rejected)"/.test(last)) {
+      throw new StepFailure("notarize", why, logFile, false);
+    }
+    const refused = refusal(spawnSync, program);
+    if (refused) throw new NotaryRefused(refused);
+    throw new StepFailure("notarize", why, logFile, true);
+  }
+  if (/did not staple/.test(last)) throw new StepFailure("notarize", why, logFile, true);
+  if (/Gatekeeper does not accept|does not verify after its signing/.test(last)) {
+    throw new StepFailure("verify", why, logFile, false);
+  }
+  // the plan's refusal comes before the program's closing `the signing of … failed`
+  const pinned = said.match(/^substrate-release: the plan asks for osx-sign .* is pinned here$/m);
+  if (pinned) throw new StepFailure("signer", `${why} (${pinned[0]})`, logFile, false);
+  throw new StepFailure("sign", why, logFile, false);
+}
+
+/**
+ * On mini1: the app the host built, with its plan at the top of one zip, signed, notarized and
+ * stapled by the release account's program (RELEASE_PROGRAM), whose answer is the app zipped
+ * back, nothing on a refusal (signedBy); then checked here as signHere checks its own and archived
+ * for the host's packaging half.
+ */
+function signThere({ version, owner, runDir, program = RELEASE_PROGRAM }) {
+  const step = "sign";
+  const started = Date.now();
+  const sendDir = path.join(runDir, "sign-send");
+  const signDir = path.join(runDir, "sign");
+  for (const dir of [sendDir, signDir]) {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir);
+  }
+  run("ditto", ["-x", "-k", path.join(runDir, APP_ARCHIVE), sendDir], { step, runDir });
+  copyFileSync(path.join(runDir, SIGN_PLAN), path.join(sendDir, SIGN_PLAN));
+  const sent = path.join(runDir, "sign-send.zip");
+  const back = path.join(runDir, "sign-back.zip");
+  run("ditto", ["-c", "-k", sendDir, sent], { step, runDir });
+  try {
+    signedBy({ program, sent, back, logFile: path.join(runDir, `${step}.log`) });
+  } finally {
+    rmSync(sendDir, { recursive: true, force: true });
+    rmSync(sent, { force: true });
+  }
+  run("ditto", ["-x", "-k", back, signDir], { step, runDir });
+  rmSync(back, { force: true });
+  const app = path.join(signDir, "Paseo.app");
+  verifyApp({ app, version, owner, runDir });
+  run("ditto", ["-c", "-k", "--keepParent", app, path.join(runDir, SIGNED_ARCHIVE)], {
+    step,
+    runDir,
+  });
+  log(
+    `  signed, notarized and stapled by the release program (${Math.round((Date.now() - started) / 1000)} s)`,
+  );
+}
+
+/**
+ * On the signing Mac: the release files the host packed are all there, and the app in the zip,
+ * the one electron-updater installs, is the app signed here.
  */
 function checkRelease({ version, owner, runDir }) {
   const releaseDir = path.join(runDir, "release");
@@ -1559,12 +1696,12 @@ function publish({ version, target, files, notes, runDir }) {
 function releaseNotes({ upstreamTag, features }) {
   const upstream = `[${upstreamTag}](https://github.com/${UPSTREAM_REPO}/releases/tag/${upstreamTag})`;
   const list = features.map((subject) => `- ${subject}`).join("\n");
-  return `Upstream Paseo ${upstream} plus:\n\n${list}\n\nBuilt on a test Mac, signed and notarized on sincoder by fork/release.mjs. The Mac app updates itself from this repository's releases.\n`;
+  return `Upstream Paseo ${upstream} plus:\n\n${list}\n\nBuilt on a test Mac, signed and notarized by fork/release.mjs. The Mac app updates itself from this repository's releases.\n`;
 }
 
 function handoverNotes({ upstreamTag }) {
   const upstream = `[${upstreamTag}](https://github.com/${UPSTREAM_REPO}/releases/tag/${upstreamTag})`;
-  return `Upstream Paseo ${upstream}, unchanged, and the fork's last release: upstream now carries the fork's features. Signed by the fork so a fork app takes it, it updates from upstream's releases, so the app moves on to stock Paseo by itself.\n\nBuilt on a test Mac, signed and notarized on sincoder by fork/release.mjs.\n`;
+  return `Upstream Paseo ${upstream}, unchanged, and the fork's last release: upstream now carries the fork's features. Signed by the fork so a fork app takes it, it updates from upstream's releases, so the app moves on to stock Paseo by itself.\n\nBuilt on a test Mac, signed and notarized by fork/release.mjs.\n`;
 }
 
 function shellQuote(value) {
@@ -1713,7 +1850,7 @@ export function conflictAgentArgs({ commit, oldBase, newBase, files }) {
   ];
 }
 
-/** The conflict agent run once on one stop, in sincoder's own agent config and model proxy. */
+/** The conflict agent run once on one stop, in the signing Mac's own agent config and model proxy. */
 function conflictAgent({ commit, oldBase, newBase, files, runDir }) {
   const configDir = path.join(ROOT, "agent-config");
   mkdirSync(configDir, { recursive: true });
@@ -1991,7 +2128,8 @@ function release({
     log(`  checked and built ${ctx.version} unsigned; the app stays ${ctx.publishedVersion}`);
     return;
   }
-  signHere({ version, owner, runDir });
+  if (RELEASE_PROGRAM.length) signThere({ version, owner, runDir });
+  else signHere({ version, owner, runDir });
   const signed = path.join(runDir, SIGNED_ARCHIVE);
   withHost(ctx.host, runDir, () =>
     rsync(signed, `${ctx.host}:${hostRun(path.basename(runDir))}/${SIGNED_ARCHIVE}`, { runDir }),
@@ -2151,7 +2289,7 @@ export function failureNotice({
     return {
       step: "rebase",
       title: `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`,
-      body: `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not finish it in this run. The app stays on ${previous}. ${conflictCount({ ctx, attempts, head })}\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`,
+      body: `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not finish it in this run. The app stays on ${previous}. ${conflictCount({ ctx, attempts, head })}\n\nRun log: ${runDir} on ${HERE}.\n\n${ctx.conflict.diff}\n`,
       ask: `Find why upstream ${ctx.latestTag} conflicts with the fork's commits on branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`,
     };
   }
@@ -2163,6 +2301,9 @@ export function failureNotice({
   let ask = `Find why the fork release failed at ${step} for upstream ${ctx.latestTag} with branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`;
   if (step === "retire") {
     ask = `Find which merged features' commits leave ${RELEASE_BRANCH} and which pulls leave UPSTREAM_PULLS for upstream ${ctx.latestTag} with branch ${head} ${from}, by fork/README.md's Retirement; taking commits off the published branch is Tim's word`;
+  } else if (step === "signer" && /is pinned here/.test(error.message ?? "")) {
+    // mini1's release program signs with the osx-sign it pins, not the build's (signedBy)
+    ask = `Find which @electron/osx-sign upstream ${ctx.latestTag} builds with ${from}: the release account's program on mini1 signs only with the version it pins, so the fix is OSX_SIGN_VERSION in Alma's scripts/agent-host/substrate-release, landed and installed on mini1 by root's update (Tim's paste), never a commit on ${RELEASE_BRANCH}`;
   } else if (step === "notarize" && notaryRefused(error.message ?? "")) {
     // Refused after the check before the build let the run in: the next run's check holds it.
     ask = `Find why Apple's notary refused ${NOTARY_PROFILE} at notarize for upstream ${ctx.latestTag} with branch ${head} ${from}; a refused sign-in is Tim's step (a new app-specific password for a 401, the developer agreement for a 403) and needs no fix on ${RELEASE_BRANCH}, so name it as his step`;
@@ -2175,7 +2316,7 @@ export function failureNotice({
   return {
     step,
     title: `Paseo fork release failed at ${step} (upstream ${ctx.latestTag})`,
-    body: `${error.message}\n\nThe app stays on ${previous}. ${count}\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`,
+    body: `${error.message}\n\nThe app stays on ${previous}. ${count}\n\nRun log: ${runDir} on ${HERE}.\n\n${tail(error.logFile)}\n`,
     ask,
   };
 }
@@ -2229,7 +2370,7 @@ export function releaseNotices({ ctx, open = [], failed, gated = false, runDir }
             standing: true,
             key: releaseKey(built),
             title: `Paseo fork: branch ${head} passed its checks, the app unchanged`,
-            body: `Branch ${head} on upstream ${built} changes only the release job's own files since ${ctx.publishedVersion}, so the job checked and built it and published nothing: your app stays on ${ctx.publishedVersion}, with no update to take.\n\nRun log: ${runDir} on sincoder.\n`,
+            body: `Branch ${head} on upstream ${built} changes only the release job's own files since ${ctx.publishedVersion}, so the job checked and built it and published nothing: your app stays on ${ctx.publishedVersion}, with no update to take.\n\nRun log: ${runDir} on ${HERE}.\n`,
           },
         ]
       : [];
@@ -2261,7 +2402,7 @@ export function releaseNotices({ ctx, open = [], failed, gated = false, runDir }
       standing: true,
       key: releaseKey(built),
       title: `Paseo fork ${ctx.version} is out on upstream ${built}`,
-      body: `The fork release of upstream ${built} passed every check and ${ctx.version} is published; your app takes it at its next update.${conflict}\n\nRun log: ${runDir} on sincoder.\n`,
+      body: `The fork release of upstream ${built} passed every check and ${ctx.version} is published; your app takes it at its next update.${conflict}\n\nRun log: ${runDir} on ${HERE}.\n`,
     });
   }
   return { notices, open: [] };
@@ -2314,7 +2455,7 @@ function settle({ outcome, error, ctx, state, runDir }) {
       level: "info",
       key: `retired ${ctx.latestTag}`,
       title: `Quote is in upstream Paseo ${ctx.latestTag}: your app goes back to stock by itself`,
-      body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add. Its release job on sincoder published one last release, ${ctx.version}: upstream's ${ctx.latestTag}, signed by the fork so your app accepts it, and updating from upstream's releases. Your app installs it at its next update, then stock Paseo ${ctx.latestTag} at the one after, with nothing to do on your side; the daemon and your chats keep running. The job has stopped.\n\nLast release: ${handover}\n`,
+      body: `Upstream Paseo ${ctx.latestTag} includes the fork's features, so the fork has nothing left to add. Its release job on ${HERE} published one last release, ${ctx.version}: upstream's ${ctx.latestTag}, signed by the fork so your app accepts it, and updating from upstream's releases. Your app installs it at its next update, then stock Paseo ${ctx.latestTag} at the one after, with nothing to do on your side; the daemon and your chats keep running. The job has stopped.\n\nLast release: ${handover}\n`,
     });
     log(`retired on ${ctx.latestTag} with ${ctx.version}`);
   } else if (outcome === "gated") {
@@ -2513,7 +2654,7 @@ function main() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [mode, ...rest] = process.argv.slice(2);
   if (mode === "--build-host") {
-    // The build host's half, started over ssh by sincoder's run (runHostPhase).
+    // The build host's half, started over ssh by the signing Mac's run (runHostPhase).
     process.exitCode = hostPhase(rest[0], rest[1]);
   } else if (mode === "--edit-todo") {
     // git's sequence editor for a rebase that drops superseded commits (rebaseOnto).
