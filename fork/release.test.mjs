@@ -748,7 +748,8 @@ test("the build hands electron-builder the signing hook and the ad-hoc identity"
 });
 
 test("the app's unit tests try a failed test once more, and the e2e step runs only the branch's specs", () => {
-  const byStep = (specs) => Object.fromEntries(gateSteps(specs).map(([step, ...rest]) => [step, rest]));
+  const byStep = (specs) =>
+    Object.fromEntries(gateSteps(specs).map(([step, ...rest]) => [step, rest]));
   const withSpecs = byStep(["e2e/browser/a.spec.ts"]);
   assert.deepEqual(withSpecs["app-unit"], [
     "npm",
