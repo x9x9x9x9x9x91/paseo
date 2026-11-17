@@ -7,11 +7,11 @@
 // The helpers and frameworks inside keep their default requirements: each has an identifier
 // of its own, which the app's requirement would fail.
 //
-// The job builds on a test Mac, which holds no signing key, and signs on sincoder, which holds
-// it. So on the build Mac the hook signs nothing: with PASEO_FORK_SIGN_PLAN set it writes what
-// electron-builder asked for, every path's options and what to leave unsigned, to that file.
-// sincoder then signs the same bundle from the plan (`node sign-mac.cjs sign <app> <plan>`) with
-// the same @electron/osx-sign, so no rule of electron-builder's is copied here.
+// The job builds on a test Mac, which holds no signing key, and signs on the signing Mac, which
+// holds it. So on the build Mac the hook signs nothing: with PASEO_FORK_SIGN_PLAN set it writes
+// what electron-builder asked for, every path's options and what to leave unsigned, to that file.
+// The signing Mac then signs the same bundle from the plan (`node sign-mac.cjs sign <app> <plan>`)
+// with the same @electron/osx-sign, so no rule of electron-builder's is copied here.
 const {
   existsSync,
   lstatSync,
@@ -25,7 +25,7 @@ const path = require("node:path");
 
 // getpaseo's Developer ID team, which signs stock Paseo.
 const UPSTREAM_TEAM = "99ZMJMKU9Y";
-// Developer ID Application: Tim Roth, which signs the fork on sincoder.
+// Developer ID Application: Tim Roth, which signs the fork on the signing Mac.
 const FORK_TEAM = "HKM8HFGKC6";
 const FORK_IDENTITY = `Developer ID Application: Tim Roth (${FORK_TEAM})`;
 const OSX_SIGN = "@electron/osx-sign";
@@ -93,10 +93,14 @@ function signPlan(options, { identifier, osxSignVersion }) {
       ignored.push(relative);
     }
     const raw = options.optionsForFile ? options.optionsForFile(file) : {};
+    // The bundle's own entry carries the fork's two-team requirement, so a signer that adds none
+    // (mini1's release program, ALM-4279) signs it as optionsFromPlan does.
     const entry = {
       ...raw,
       entitlements: inlineFile(raw?.entitlements),
-      requirements: inlineFile(raw?.requirements),
+      requirements: relative
+        ? inlineFile(raw?.requirements)
+        : `=${designatedRequirement(identifier)}`,
     };
     const key = JSON.stringify(entry);
     if (!index.has(key)) {
@@ -196,7 +200,7 @@ async function sign(options, packager) {
   });
 }
 
-/** sincoder's half: sign `app` from the build Mac's plan with the osx-sign under `signerDir`. */
+/** The signing Mac's half: sign `app` from the build Mac's plan, osx-sign in `signerDir`. */
 async function signFromPlan({ app, plan, signerDir }) {
   const installed = packageVersion(OSX_SIGN, signerDir);
   if (installed !== plan.osxSignVersion) {
