@@ -520,8 +520,8 @@ function gh(args, options = {}) {
   return run("gh", args, { step: "github", ...options }).stdout;
 }
 
-function rebaseInProgress() {
-  return ["rebase-merge", "rebase-apply"].some((dir) => existsSync(path.join(BUILD, ".git", dir)));
+function rebaseInProgress(cwd = BUILD) {
+  return ["rebase-merge", "rebase-apply"].some((dir) => existsSync(path.join(cwd, ".git", dir)));
 }
 
 function forkReleases(runDir) {
@@ -1451,9 +1451,9 @@ Do not commit, do not run git rebase, do not install packages, build or run test
 End your reply with one line: RESOLVED, or CANNOT: <one sentence why>.`;
 }
 
-function unmergedFiles(runDir) {
+function unmergedFiles(runDir, cwd = BUILD) {
   // -z, so a path git would quote (non-ASCII) comes back as its name on disk (ALM-4545).
-  const listed = git(["diff", "--name-only", "-z", "--diff-filter=U"], { runDir });
+  const listed = git(["diff", "--name-only", "-z", "--diff-filter=U"], { runDir, cwd });
   return listed.split("\0").filter(Boolean);
 }
 
@@ -1484,60 +1484,195 @@ export function conflictAgentArgs({ commit, oldBase, newBase, files }) {
   ];
 }
 
-/** One headless agent attempt per conflicting stop of the rebase; false leaves it to Tim. */
-function resolveConflicts({ oldBase, newBase, runDir }) {
+/** The conflict agent run once on one stop, in sincoder's own agent config and model proxy. */
+function conflictAgent({ commit, oldBase, newBase, files, runDir }) {
   const configDir = path.join(ROOT, "agent-config");
   mkdirSync(configDir, { recursive: true });
-  for (let stop = 0; stop < 5 && rebaseInProgress(); stop += 1) {
-    const files = unmergedFiles(runDir);
-    if (files.length === 0) return false;
-    const commit = git(["rev-parse", "--short", "REBASE_HEAD"], { runDir });
+  return run("claude", conflictAgentArgs({ commit, oldBase, newBase, files }), {
+    step: "conflict-agent",
+    runDir,
+    quiet: true,
+    timeoutMs: 40 * 60_000,
+    env: {
+      CLAUDE_CONFIG_DIR: configDir,
+      ANTHROPIC_BASE_URL: PROXY_URL,
+      ANTHROPIC_AUTH_TOKEN: "vibeproxy-dummy",
+      ANTHROPIC_API_KEY: "",
+    },
+  });
+}
+
+/**
+ * One headless agent attempt per conflicting stop of the rebase. `done` false leaves it to Tim;
+ * `resolved` counts the stops the agent got past, which the kept rebase carries (keptRebase).
+ */
+function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = conflictAgent }) {
+  let resolved = 0;
+  for (let stop = 0; stop < 5 && rebaseInProgress(cwd); stop += 1) {
+    const files = unmergedFiles(runDir, cwd);
+    if (files.length === 0) return { done: false, resolved };
+    const stopped = git(["rev-parse", "REBASE_HEAD"], { runDir, cwd });
+    const commit = stopped.slice(0, 9);
     log(`  conflict agent on ${commit}: ${files.join(", ")}`);
-    const reply = run("claude", conflictAgentArgs({ commit, oldBase, newBase, files }), {
-      step: "conflict-agent",
-      runDir,
-      quiet: true,
-      timeoutMs: 40 * 60_000,
-      env: {
-        CLAUDE_CONFIG_DIR: configDir,
-        ANTHROPIC_BASE_URL: PROXY_URL,
-        ANTHROPIC_AUTH_TOKEN: "vibeproxy-dummy",
-        ANTHROPIC_API_KEY: "",
-      },
-    });
+    const reply = askAgent({ commit, oldBase, newBase, files, runDir, cwd });
     const markers = run("git", ["grep", "-l", "-E", "^(<<<<<<<|>>>>>>>) ", "--", ...files], {
       runDir,
+      cwd,
       quiet: true,
     }).stdout;
-    if (reply.status !== 0 || !/RESOLVED\s*$/.test(reply.stdout) || markers) return false;
-    stageResolved(files, { runDir });
+    if (reply.status !== 0 || !/RESOLVED\s*$/.test(reply.stdout) || markers) {
+      return { done: false, resolved };
+    }
+    stageResolved(files, { runDir, cwd });
     run("git", ["rebase", "--continue"], {
       step: "rebase",
       runDir,
+      cwd,
       quiet: true,
       env: { GIT_EDITOR: "true" },
     });
+    // A continue that stops on a later commit's conflicts has still committed this one.
+    const after = rebaseInProgress(cwd)
+      ? run("git", ["rev-parse", "-q", "--verify", "REBASE_HEAD"], { runDir, cwd, quiet: true })
+          .stdout
+      : "";
+    if (after === stopped) return { done: false, resolved };
+    resolved += 1;
   }
-  return !rebaseInProgress();
+  return { done: !rebaseInProgress(cwd), resolved };
 }
 
-/** Replays the branch onto `newBase`, leaving out the commits in `drop` (full shas). */
-function rebaseOnto({ newBase, oldBase, head, runDir, drop = [] }) {
-  git(["checkout", "-q", "-f", "--detach", head], { runDir });
-  const rebase = ["rebase", ...(drop.length > 0 ? ["-i"] : []), "--onto", newBase, oldBase];
+/** The build clone's kept rebase: its record in the clone's git dir, its result held by a ref. */
+const KEPT_REBASE_FILE = "fork-kept-rebase.json";
+const KEPT_REBASE_REF = "refs/fork/kept-rebase";
+
+/** The rebase an earlier run kept in the clone at `cwd`, or null (keptRebase). */
+export function readKeptRebase(cwd = BUILD) {
+  try {
+    return JSON.parse(readFileSync(path.join(cwd, ".git", KEPT_REBASE_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeKeptRebase(record, { runDir, cwd }) {
+  git(["update-ref", KEPT_REBASE_REF, record.result], { runDir, cwd });
+  writeAtomically(path.join(cwd, ".git", KEPT_REBASE_FILE), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+function isAncestor(commit, of, { runDir, cwd }) {
+  return (
+    run("git", ["merge-base", "--is-ancestor", commit, of], { runDir, cwd, quiet: true }).status ===
+    0
+  );
+}
+
+/**
+ * The kept rebase a run starts from, or null to rebase from the old base. A kept rebase maps the
+ * branch's commits from `base` up to `source` onto `onto` as `result`, and holds while the run
+ * rebases onto the same tag from the same base, the branch still runs through `source`, and
+ * leaves out the same commits up to it: the conflicts the agent resolved there are not ported
+ * again, so a failed try keeps its port and the next try differs only by the commits since
+ * (ALM-4637). A branch rewritten below `source` (a fork commit amended for a fresh port) has
+ * left it and rebases from scratch.
+ */
+export function keptRebase(kept, { onto, base, head, drop, runDir, cwd = BUILD }) {
+  if (!kept || kept.onto !== onto || kept.base !== base) return null;
+  const exists = run("git", ["cat-file", "-e", `${kept.result}^{commit}`], {
+    runDir,
+    cwd,
+    quiet: true,
+  });
+  if (exists.status !== 0 || !isAncestor(kept.source, head, { runDir, cwd })) return null;
+  const upTo = (shas) =>
+    shas
+      .filter((sha) => isAncestor(sha, kept.source, { runDir, cwd }))
+      .sort()
+      .join(",");
+  return upTo(drop) === upTo(kept.drop ?? []) ? kept : null;
+}
+
+/**
+ * Replays the branch onto `newBase`, leaving out the commits in `drop` (full shas). It starts
+ * from the rebase an earlier run kept when that one holds (keptRebase), and keeps its own, the
+ * whole of it or the commits replayed before the stop it could not get past, for the next run;
+ * `keep` false (a dry run) reads the kept rebase without writing one.
+ */
+export function rebaseOnto({
+  newBase,
+  oldBase,
+  head,
+  runDir,
+  drop = [],
+  keep = true,
+  cwd = BUILD,
+  askAgent,
+}) {
+  const at = { runDir, cwd };
+  const onto = git(["rev-parse", `${newBase}^{commit}`], at);
+  const base = git(["rev-parse", `${oldBase}^{commit}`], at);
+  const kept = keptRebase(readKeptRebase(cwd), { onto, base, head, drop, ...at });
+  let resolvedBy = kept?.resolvedBy ?? null;
+  const record = (source, result) => {
+    if (!keep) return;
+    const upTo = drop.filter((sha) => isAncestor(sha, source, at));
+    writeKeptRebase({ onto, base, source, result, drop: upTo, resolvedBy }, at);
+  };
+  if (kept) {
+    log(`  the rebase kept by an earlier run carries the branch up to ${kept.source.slice(0, 9)}`);
+  }
+  if (kept?.source === head) {
+    git(["checkout", "-q", "-f", "--detach", kept.result], at);
+    return { resolvedBy };
+  }
+  const start = kept ? kept.result : onto;
+  git(["checkout", "-q", "-f", "--detach", head], at);
+  const rebase = [
+    "rebase",
+    ...(drop.length > 0 ? ["-i"] : []),
+    "--onto",
+    start,
+    kept?.source ?? base,
+  ];
   // The todo is edited by this file (--edit-todo), so the rebase asks nobody.
   const editor = `${shellQuote(process.execPath)} ${shellQuote(fileURLToPath(import.meta.url))} --edit-todo`;
   const env =
     drop.length > 0 ? { GIT_SEQUENCE_EDITOR: editor, PASEO_FORK_DROP: drop.join(",") } : {};
-  if (run("git", rebase, { step: "rebase", runDir, quiet: true, env }).status === 0) {
-    return { resolvedBy: null };
+  if (run("git", rebase, { step: "rebase", ...at, quiet: true, env }).status === 0) {
+    record(head, git(["rev-parse", "HEAD"], at));
+    return { resolvedBy };
   }
-  if (resolveConflicts({ oldBase, newBase, runDir })) return { resolvedBy: "agent" };
+  const { done, resolved } = resolveConflicts({ oldBase, newBase, ...at, askAgent });
+  if (resolved > 0) resolvedBy = "agent";
+  if (done) {
+    record(head, git(["rev-parse", "HEAD"], at));
+    return { resolvedBy };
+  }
   // Read where the rebase stopped last, which is not the first stop when the agent got further.
-  const files = rebaseInProgress() ? unmergedFiles(runDir) : [];
-  const diff = run("git", ["diff"], { runDir, quiet: true }).stdout.slice(0, 6000);
-  if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
+  const files = rebaseInProgress(cwd) ? unmergedFiles(runDir, cwd) : [];
+  const diff = run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000);
+  if (rebaseInProgress(cwd)) {
+    keepUpToStop({ start, base, head, record, ...at });
+    run("git", ["rebase", "--abort"], { ...at, quiet: true });
+  }
   return { conflict: { files, diff } };
+}
+
+/**
+ * Keeps what a stopped rebase replayed: the branch up to the commit before the one it stopped on,
+ * as HEAD has it. Only a branch with no merge between its base and head replays in that order.
+ */
+function keepUpToStop({ start, base, head, record, runDir, cwd }) {
+  const at = { runDir, cwd };
+  const replayed = git(["rev-parse", "HEAD"], at);
+  const before = run("git", ["rev-parse", "-q", "--verify", "REBASE_HEAD^"], {
+    ...at,
+    quiet: true,
+  }).stdout;
+  const merges = git(["rev-list", "--merges", "--count", `${base}..${head}`], at);
+  if (replayed === start || !before || merges !== "0") return;
+  record(before, replayed);
+  log(`  kept the rebase up to ${before.slice(0, 9)} for the next run`);
 }
 
 function pruneRuns() {
@@ -1679,6 +1814,7 @@ function work({ ctx, options, plan, runDir }) {
       head: ctx.head,
       runDir,
       drop: leaving,
+      keep: !options.dryRun,
     });
     if (rebased.conflict) {
       ctx.conflict = rebased.conflict;
