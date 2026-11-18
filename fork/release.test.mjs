@@ -845,8 +845,8 @@ function keptRebaseRepo(t, forkCommits) {
   commit("upstream's next release");
   git("tag", "v0.11.5");
   git("checkout", "-q", "fork");
-  const rebase = ({ head = rev("fork"), ports, drop = [] }) => {
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", REBASE_RUN], {
+  const spawnRebase = ({ head = rev("fork"), ports, drop = [] }) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", REBASE_RUN], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -855,10 +855,12 @@ function keptRebaseRepo(t, forkCommits) {
         RUN: JSON.stringify({ cwd: repo, head, drop, ports, calls }),
       },
     });
+  const rebase = (args) => {
+    const result = spawnRebase(args);
     assert.equal(result.status, 0, result.stderr);
     return JSON.parse(result.stdout.trim().split("\n").at(-1));
   };
-  return { repo, git, write, commit, rev, show, agentRuns, rebase };
+  return { repo, git, write, commit, rev, show, agentRuns, rebase, spawnRebase };
 }
 
 test("a rebase the agent resolved is kept, so the next run ports only the commits after it", (t) => {
@@ -922,6 +924,23 @@ test("a try that stops where the kept rebase ends names that kept part for the n
   assert.equal(rebase({ ports: portA }).conflict.keptUpTo, rev("fork~1"));
   assert.deepEqual(agentRuns(), [FIRST, SECOND, SECOND]);
   assert.deepEqual(readKeptRebase(repo), kept);
+});
+
+test("a rebase that fails before it stops is a failed step, with nothing kept as done", (t) => {
+  const { repo, git, agentRuns, spawnRebase } = keptRebaseRepo(t, ({ write, commit }) => {
+    write(FIRST, "the fork's a\n");
+    commit("feat(app): the fork's a");
+  });
+  // A pre-rebase hook that refuses makes git rebase fail with no rebase in progress.
+  const hooks = path.join(repo, ".git", "refusing-hooks");
+  mkdirSync(hooks);
+  writeFileSync(path.join(hooks, "pre-rebase"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  git("config", "core.hooksPath", hooks);
+  const result = spawnRebase({ ports: {} });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /git rebase onto v0\.11\.5 failed without stopping on a commit/);
+  assert.deepEqual(agentRuns(), []);
+  assert.equal(readKeptRebase(repo), null);
 });
 
 test("a kept rebase leaves out the same superseded commits, and a changed set ports afresh", (t) => {
