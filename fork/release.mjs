@@ -1894,18 +1894,20 @@ export function rebaseOnto({
 /**
  * The conflict a rebase the agent could not finish stopped on, read where it stopped last (not
  * the first stop when the agent got further), with the rebase kept up to there and aborted;
- * `keptUpTo` is the branch commit the kept part ends on, or null when this run kept none.
+ * `keptUpTo` is the branch commit the kept part ends on, or null when this run kept none, and
+ * `aborted` says no rebase was left in progress to read.
  */
 function leaveStoppedRebase({ start, base, head, record, keepPart, runDir, cwd }) {
   const at = { runDir, cwd };
-  const files = rebaseInProgress(cwd) ? unmergedFiles(runDir, cwd) : [];
+  const stopped = rebaseInProgress(cwd);
+  const files = stopped ? unmergedFiles(runDir, cwd) : [];
   const diff = run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000);
   let keptUpTo = null;
-  if (rebaseInProgress(cwd)) {
+  if (stopped) {
     if (keepPart) keptUpTo = keepUpToStop({ start, base, head, record, ...at });
     run("git", ["rebase", "--abort"], { ...at, quiet: true });
   }
-  return { files, diff, keptUpTo };
+  return { files, diff, keptUpTo, aborted: !stopped };
 }
 
 /**
@@ -2130,9 +2132,11 @@ export function failureNotice({
   const head = ctx.head.slice(0, 9);
   const from = `from ${jobLog} and the run folder under ${runs}/ this notice names`;
   if (outcome === "conflict") {
-    const where = ctx.conflict.files.length
-      ? `conflicted in ${ctx.conflict.files.join(", ")}`
-      : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
+    const where = ctx.conflict.aborted
+      ? "stopped, and the rebase was no longer in progress when the job looked, so no conflict is shown"
+      : ctx.conflict.files.length
+        ? `conflicted in ${ctx.conflict.files.join(", ")}`
+        : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
     return {
       step: "rebase",
       title: `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`,
