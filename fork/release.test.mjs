@@ -938,7 +938,10 @@ test("a rebase that fails before it stops is a failed step, with nothing kept as
   git("config", "core.hooksPath", hooks);
   const result = spawnRebase({ ports: {} });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /the rebase from v0\.11\.4 toward v0\.11\.5 failed without stopping on a commit/);
+  assert.match(
+    result.stderr,
+    /the rebase from v0\.11\.4 toward v0\.11\.5 failed without stopping on a commit/,
+  );
   assert.deepEqual(agentRuns(), []);
   assert.equal(readKeptRebase(repo), null);
 });
