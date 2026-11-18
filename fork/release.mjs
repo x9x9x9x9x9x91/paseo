@@ -168,6 +168,7 @@ export const TOOLS_PARTS = new Set([
   "retireLaunchAgent",
   "work",
   "failureNotice",
+  "conflictCount",
   "releaseKey",
   "releaseNotices",
   "DONE",
@@ -1848,9 +1849,10 @@ export function rebaseOnto({
   const kept = keptRebase(readKeptRebase(cwd), { onto, base, head, drop, ...at });
   let resolvedBy = kept?.resolvedBy ?? null;
   const record = (source, result) => {
-    if (!keep) return;
+    if (!keep) return false;
     const upTo = drop.filter((sha) => isAncestor(sha, source, at));
     writeKeptRebase({ onto, base, source, result, drop: upTo, resolvedBy }, at);
+    return true;
   };
   if (kept) {
     log(`  the rebase kept by an earlier run carries the branch up to ${kept.source.slice(0, 9)}`);
@@ -1883,27 +1885,33 @@ export function rebaseOnto({
     return { resolvedBy };
   }
   const { keepPart } = resolution;
-  return { conflict: leaveStoppedRebase({ start, base, head, record, keepPart, ...at }) };
+  const conflict = leaveStoppedRebase({ start, base, head, record, keepPart, ...at });
+  // The next run starts from this run's kept part, or else from the earlier run's it started from.
+  conflict.keptUpTo ??= kept?.source ?? null;
+  return { conflict };
 }
 
 /**
  * The conflict a rebase the agent could not finish stopped on, read where it stopped last (not
- * the first stop when the agent got further), with the rebase kept up to there and aborted.
+ * the first stop when the agent got further), with the rebase kept up to there and aborted;
+ * `keptUpTo` is the branch commit the kept part ends on, or null when this run kept none.
  */
 function leaveStoppedRebase({ start, base, head, record, keepPart, runDir, cwd }) {
   const at = { runDir, cwd };
   const files = rebaseInProgress(cwd) ? unmergedFiles(runDir, cwd) : [];
   const diff = run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000);
+  let keptUpTo = null;
   if (rebaseInProgress(cwd)) {
-    if (keepPart) keepUpToStop({ start, base, head, record, ...at });
+    if (keepPart) keptUpTo = keepUpToStop({ start, base, head, record, ...at });
     run("git", ["rebase", "--abort"], { ...at, quiet: true });
   }
-  return { files, diff };
+  return { files, diff, keptUpTo };
 }
 
 /**
  * Keeps what a stopped rebase replayed: the branch up to the commit before the one it stopped on,
- * as HEAD has it. Only a branch with no merge between its base and head replays in that order.
+ * as HEAD has it, and returns that commit, or null when it keeps nothing. Only a branch with no
+ * merge between its base and head replays in that order.
  */
 function keepUpToStop({ start, base, head, record, runDir, cwd }) {
   const at = { runDir, cwd };
@@ -1913,9 +1921,9 @@ function keepUpToStop({ start, base, head, record, runDir, cwd }) {
     quiet: true,
   }).stdout;
   const merges = git(["rev-list", "--merges", "--count", `${base}..${head}`], at);
-  if (replayed === start || !before || merges !== "0") return;
-  record(before, replayed);
+  if (replayed === start || !before || merges !== "0" || !record(before, replayed)) return null;
   log(`  kept the rebase up to ${before.slice(0, 9)} for the next run`);
+  return before;
 }
 
 function pruneRuns() {
@@ -2128,7 +2136,7 @@ export function failureNotice({
     return {
       step: "rebase",
       title: `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`,
-      body: `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not resolve it. The app stays on ${previous}.\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`,
+      body: `Rebasing the fork's commits onto upstream ${ctx.latestTag} ${where}, and the conflict agent could not finish it in this run. The app stays on ${previous}. ${conflictCount({ ctx, attempts, head })}\n\nRun log: ${runDir} on sincoder.\n\n${ctx.conflict.diff}\n`,
       ask: `Find why upstream ${ctx.latestTag} conflicts with the fork's commits on branch ${head} ${from}, and fix it on ${RELEASE_BRANCH}`,
     };
   }
@@ -2155,6 +2163,26 @@ export function failureNotice({
     body: `${error.message}\n\nThe app stays on ${previous}. ${count}\n\nRun log: ${runDir} on sincoder.\n\n${tail(error.logFile)}\n`,
     ask,
   };
+}
+
+/**
+ * A conflict's try, counted like any failure's (countFailure), and where the next run starts: the
+ * rebase kept up to the stop (keptRebase), so a try that ends at a conflict is no final word until
+ * the last (ALM-4655).
+ */
+function conflictCount({ ctx, attempts, head }) {
+  const keptUpTo = ctx.conflict.keptUpTo?.slice(0, 9);
+  const tried = `This was attempt ${attempts} of ${MAX_ATTEMPTS} for upstream ${ctx.latestTag} with branch ${head}`;
+  if (attempts < MAX_ATTEMPTS) {
+    const from = keptUpTo
+      ? `carries on from the rebase kept up to ${keptUpTo}, so it may finish on its own`
+      : "rebases again from the start";
+    return `${tried}: the next hourly run ${from}; after attempt ${MAX_ATTEMPTS} the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.`;
+  }
+  const after = keptUpTo
+    ? `; a commit added to the branch carries on from the rebase kept up to ${keptUpTo}`
+    : "";
+  return `${tried}, so the job now waits for a new upstream release or a new commit on ${RELEASE_BRANCH}${after}.`;
 }
 
 /**
