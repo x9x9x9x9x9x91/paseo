@@ -191,8 +191,8 @@ const NOTARY_PROFILE = process.env.PASEO_FORK_NOTARY_PROFILE ?? "substrate-notar
 const NOTIFY_SCRIPT =
   process.env.PASEO_FORK_NOTIFY_SCRIPT ??
   path.join(os.homedir(), "Vault/Alma/Code/scheduled-tasks/vault_notifications.py");
-// Every state write is copied here too, where Alma's sched_watch warns once the job has not
-// checked upstream for 12 hours.
+// Every state write is copied here too, where Alma's morning brief (paseo_fork_signals) warns once
+// the job has not checked upstream for 12 hours (ALM-3645).
 const STATE_COPY =
   process.env.PASEO_FORK_STATE_COPY ??
   path.join(os.homedir(), "Vault/Alma/Local/Task-State/paseo-fork/state.json");
@@ -2398,7 +2398,7 @@ function noticeClosedPulls({ state, options, runDir }) {
 
 /**
  * work(), a failure read as a StepFailure. Null when the build host was away or busy, which is
- * not the candidate's failure: nothing is counted, and sched_watch speaks if it lasts.
+ * not the candidate's failure: nothing is counted, and the morning brief speaks if it lasts.
  */
 function tryWork({ ctx, options, plan, runDir }) {
   try {
@@ -2452,7 +2452,7 @@ function runOnce(options, state) {
   try {
     ctx = poll(options, runDir);
   } catch (error) {
-    // GitHub or the network. No state change: sched_watch's dead-man probe speaks if it lasts.
+    // GitHub or the network. No state change: the morning brief speaks if it lasts.
     log(`could not poll: ${error.message}`);
     return 1;
   }
