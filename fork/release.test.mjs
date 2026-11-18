@@ -938,7 +938,7 @@ test("a rebase that fails before it stops is a failed step, with nothing kept as
   git("config", "core.hooksPath", hooks);
   const result = spawnRebase({ ports: {} });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /git rebase onto v0\.11\.5 failed without stopping on a commit/);
+  assert.match(result.stderr, /the rebase from v0\.11\.4 toward v0\.11\.5 failed without stopping on a commit/);
   assert.deepEqual(agentRuns(), []);
   assert.equal(readKeptRebase(repo), null);
 });
@@ -1277,13 +1277,13 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
   // A conflict is a counted try like any failure, and the next run starts from the kept rebase.
   assert.match(
     conflict.body,
-    /This was attempt 1 of 3 for upstream v0\.13\.1 with branch d975b4af3: the next hourly run rebases again from the start; after attempt 3 the job waits/,
+    /This was attempt 1 of 3 for upstream v0\.13\.1 with branch d975b4af3: the job's next run on v0\.13\.1 rebases again from the start; after attempt 3 the job waits/,
   );
   ctx.conflict.keptUpTo = "6827d2572f0e5c1a9b3d4e7f8a0b1c2d3e4f5a6b";
   const keptTry = notice("conflict", undefined, 2, "r");
   assert.match(
     keptTry.body,
-    /attempt 2 of 3 .*: the next hourly run carries on from the rebase kept up to 6827d2572, so it may finish on its own;/,
+    /attempt 2 of 3 .*: the job's next run on v0\.13\.1 carries on from the rebase kept up to 6827d2572, so it may finish on its own;/,
   );
   assert.equal(keptTry.ask, conflict.ask);
   const lastTry = notice("conflict", undefined, 3, "r");
@@ -1291,7 +1291,7 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
     lastTry.body,
     /attempt 3 of 3 for upstream v0\.13\.1 with branch d975b4af3, so the job now waits for a new upstream release or a new commit on fork\/release; a commit added to the branch carries on from the rebase kept up to 6827d2572\./,
   );
-  assert.doesNotMatch(lastTry.body, /next hourly run/);
+  assert.doesNotMatch(lastTry.body, /next run on/);
   // A stop whose rebase was gone by the time the job read it is no empty commit.
   ctx.conflict = { files: [], diff: "", keptUpTo: null, aborted: true };
   const gone = notice("conflict", undefined, 1, "r").body;
