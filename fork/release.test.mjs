@@ -872,7 +872,7 @@ test("a rebase the agent resolved is kept, so the next run ports only the commit
 
   // Try 1: the agent ports a, then cannot port b. The port of a is kept.
   const portA = { [first]: "the port of a" };
-  assert.ok(rebase({ ports: portA }).conflict);
+  assert.equal(rebase({ ports: portA }).conflict.keptUpTo, rev("fork~1"));
   assert.deepEqual(agentRuns(), [first, second]);
   const kept = readKeptRebase(repo);
   assert.equal(kept.source, rev("fork~1"));
@@ -906,6 +906,22 @@ test("a rebase the agent resolved is kept, so the next run ports only the commit
   rebase({ ports });
   assert.equal(agentRuns().length, 5);
   assert.equal(show("HEAD", first), "the port of a 4\n");
+});
+
+test("a try that stops where the kept rebase ends names that kept part for the next run", (t) => {
+  const { repo, rev, agentRuns, rebase } = keptRebaseRepo(t, ({ write, commit }) => {
+    write(FIRST, "the fork's a\n");
+    commit("feat(app): the fork's a");
+    write(SECOND, "the fork's b\n");
+    commit("feat(app): the fork's b");
+  });
+  const portA = { [FIRST]: "the port of a" };
+  assert.equal(rebase({ ports: portA }).conflict.keptUpTo, rev("fork~1"));
+  const kept = readKeptRebase(repo);
+  // Try 2 starts from the kept part and stops on b again, so it keeps nothing new of its own.
+  assert.equal(rebase({ ports: portA }).conflict.keptUpTo, rev("fork~1"));
+  assert.deepEqual(agentRuns(), [FIRST, SECOND, SECOND]);
+  assert.deepEqual(readKeptRebase(repo), kept);
 });
 
 test("a kept rebase leaves out the same superseded commits, and a changed set ports afresh", (t) => {
@@ -958,7 +974,7 @@ test("a branch with a merge keeps no part of a stopped rebase, and keeps a whole
     commit("feat(app): the fork's b");
   });
   // The stop on b comes after the replayed commits, whose order a merge leaves to git.
-  assert.ok(rebase({ ports: {} }).conflict);
+  assert.equal(rebase({ ports: {} }).conflict.keptUpTo, null);
   assert.equal(agentRuns().length, 1);
   assert.equal(readKeptRebase(repo), null);
   assert.deepEqual(rebase({ ports: { [SECOND]: "the port of b" } }), { resolvedBy: "agent" });
@@ -1239,6 +1255,29 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
     /^Find why upstream v0\.13\.1 conflicts with the fork's commits on branch d975b4af3 from \/x\/paseo-release\/job\.log /,
   );
   assert.match(conflict.body, /conflicted in packages\/app\/a\.tsx/);
+  // A conflict is a counted try like any failure, and the next run starts from the kept rebase.
+  assert.match(
+    conflict.body,
+    /This was attempt 1 of 3 for upstream v0\.13\.1 with branch d975b4af3: the next hourly run rebases again from the start; after attempt 3 the job waits/,
+  );
+  ctx.conflict.keptUpTo = "6827d2572f0e5c1a9b3d4e7f8a0b1c2d3e4f5a6b";
+  const keptTry = notice("conflict", undefined, 2, "r");
+  assert.match(
+    keptTry.body,
+    /attempt 2 of 3 .*: the next hourly run carries on from the rebase kept up to 6827d2572, so it may finish on its own;/,
+  );
+  assert.equal(keptTry.ask, conflict.ask);
+  const lastTry = notice("conflict", undefined, 3, "r");
+  assert.match(
+    lastTry.body,
+    /attempt 3 of 3 for upstream v0\.13\.1 with branch d975b4af3, so the job now waits for a new upstream release or a new commit on fork\/release; a commit added to the branch carries on from the rebase kept up to 6827d2572\./,
+  );
+  assert.doesNotMatch(lastTry.body, /next hourly run/);
+  ctx.conflict.keptUpTo = null;
+  assert.match(
+    notice("conflict", undefined, 3, "r").body,
+    /so the job now waits for a new upstream release or a new commit on fork\/release\.\n/,
+  );
 
   const retire = notice("failed", { step: "retire", message: "held" }, 1, "r");
   assert.match(
