@@ -2132,11 +2132,14 @@ export function failureNotice({
   const head = ctx.head.slice(0, 9);
   const from = `from ${jobLog} and the run folder under ${runs}/ this notice names`;
   if (outcome === "conflict") {
-    const where = ctx.conflict.aborted
-      ? "stopped, and the rebase was no longer in progress when the job looked, so no conflict is shown"
-      : ctx.conflict.files.length
-        ? `conflicted in ${ctx.conflict.files.join(", ")}`
-        : "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
+    let where = `conflicted in ${ctx.conflict.files.join(", ")}`;
+    if (ctx.conflict.aborted) {
+      where =
+        "stopped, and the rebase was no longer in progress when the job looked, so no conflict is shown";
+    } else if (ctx.conflict.files.length === 0) {
+      where =
+        "stopped with no file left unmerged (a commit came out empty, which can mean upstream already has it)";
+    }
     return {
       step: "rebase",
       title: `Paseo fork: upstream ${ctx.latestTag} conflicts with the fork's commits`,
