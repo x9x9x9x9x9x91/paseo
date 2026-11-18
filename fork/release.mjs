@@ -1878,6 +1878,15 @@ export function rebaseOnto({
     record(head, git(["rev-parse", "HEAD"], at));
     return { resolvedBy };
   }
+  // A rebase that failed before it stopped on a commit replayed nothing to keep or resolve.
+  if (!rebaseInProgress(cwd)) {
+    const logFile = runDir ? path.join(runDir, "rebase.log") : null;
+    throw new StepFailure(
+      "rebase",
+      `git rebase onto ${newBase} failed without stopping on a commit`,
+      logFile,
+    );
+  }
   const resolution = resolveConflicts({ oldBase, newBase, ...at, askAgent });
   if (resolution.resolved > 0) resolvedBy = "agent";
   if (resolution.done) {
