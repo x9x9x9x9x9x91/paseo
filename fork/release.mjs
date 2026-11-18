@@ -1732,11 +1732,22 @@ function conflictAgent({ commit, oldBase, newBase, files, runDir }) {
 }
 
 /**
- * One headless agent attempt per conflicting stop of the rebase. `done` false leaves it to Tim;
+ * One headless agent attempt per conflicting stop of the rebase. `done` false is a conflict, a
+ * counted attempt whose next run carries on from the kept rebase (failureNotice, ALM-4655);
  * `resolved` counts the stops the agent got past, which the kept rebase carries (keptRebase);
- * `keepPart` false says HEAD no longer replays the branch up to the stop.
+ * `keepPart` false says HEAD no longer replays the branch up to the stop. A rebase that failed
+ * with no stop is a failed rebase step, so it is never kept as whole.
  */
 function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = conflictAgent }) {
+  // A rebase that failed before it stopped on a commit is no conflict, and nothing to keep as done.
+  if (!rebaseInProgress(cwd)) {
+    const logFile = runDir ? path.join(runDir, "rebase.log") : null;
+    throw new StepFailure(
+      "rebase",
+      `git rebase onto ${newBase} failed without stopping on a commit`,
+      logFile,
+    );
+  }
   let resolved = 0;
   for (let stop = 0; stop < 5 && rebaseInProgress(cwd); stop += 1) {
     const files = unmergedFiles(runDir, cwd);
@@ -1878,15 +1889,6 @@ export function rebaseOnto({
     record(head, git(["rev-parse", "HEAD"], at));
     return { resolvedBy };
   }
-  // A rebase that failed before it stopped on a commit replayed nothing to keep or resolve.
-  if (!rebaseInProgress(cwd)) {
-    const logFile = runDir ? path.join(runDir, "rebase.log") : null;
-    throw new StepFailure(
-      "rebase",
-      `git rebase onto ${newBase} failed without stopping on a commit`,
-      logFile,
-    );
-  }
   const resolution = resolveConflicts({ oldBase, newBase, ...at, askAgent });
   if (resolution.resolved > 0) resolvedBy = "agent";
   if (resolution.done) {
@@ -1894,19 +1896,16 @@ export function rebaseOnto({
     return { resolvedBy };
   }
   const { keepPart } = resolution;
-  const conflict = leaveStoppedRebase({ start, base, head, record, keepPart, ...at });
-  // The next run starts from this run's kept part, or else from the earlier run's it started from.
-  conflict.keptUpTo ??= kept?.source ?? null;
-  return { conflict };
+  return { conflict: leaveStoppedRebase({ start, base, head, kept, record, keepPart, ...at }) };
 }
 
 /**
  * The conflict a rebase the agent could not finish stopped on, read where it stopped last (not
  * the first stop when the agent got further), with the rebase kept up to there and aborted;
- * `keptUpTo` is the branch commit the kept part ends on, or null when this run kept none, and
- * `aborted` says no rebase was left in progress to read.
+ * `keptUpTo` is the branch commit the next run's kept part ends on (this run's, else the earlier
+ * run's it started from, or null), and `aborted` says no rebase was left in progress to read.
  */
-function leaveStoppedRebase({ start, base, head, record, keepPart, runDir, cwd }) {
+function leaveStoppedRebase({ start, base, head, kept, record, keepPart, runDir, cwd }) {
   const at = { runDir, cwd };
   const stopped = rebaseInProgress(cwd);
   const files = stopped ? unmergedFiles(runDir, cwd) : [];
@@ -1916,7 +1915,7 @@ function leaveStoppedRebase({ start, base, head, record, keepPart, runDir, cwd }
     if (keepPart) keptUpTo = keepUpToStop({ start, base, head, record, ...at });
     run("git", ["rebase", "--abort"], { ...at, quiet: true });
   }
-  return { files, diff, keptUpTo, aborted: !stopped };
+  return { files, diff, keptUpTo: keptUpTo ?? kept?.source ?? null, aborted: !stopped };
 }
 
 /**
