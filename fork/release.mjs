@@ -1744,7 +1744,7 @@ function resolveConflicts({ oldBase, newBase, runDir, cwd = BUILD, askAgent = co
     const logFile = runDir ? path.join(runDir, "rebase.log") : null;
     throw new StepFailure(
       "rebase",
-      `git rebase onto ${newBase} failed without stopping on a commit`,
+      `the rebase from ${oldBase} toward ${newBase} failed without stopping on a commit`,
       logFile,
     );
   }
@@ -1909,7 +1909,7 @@ function leaveStoppedRebase({ start, base, head, kept, record, keepPart, runDir,
   const at = { runDir, cwd };
   const stopped = rebaseInProgress(cwd);
   const files = stopped ? unmergedFiles(runDir, cwd) : [];
-  const diff = run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000);
+  const diff = stopped ? run("git", ["diff"], { ...at, quiet: true }).stdout.slice(0, 6000) : "";
   let keptUpTo = null;
   if (stopped) {
     if (keepPart) keptUpTo = keepUpToStop({ start, base, head, record, ...at });
@@ -2192,7 +2192,7 @@ function conflictCount({ ctx, attempts, head }) {
     const from = keptUpTo
       ? `carries on from the rebase kept up to ${keptUpTo}, so it may finish on its own`
       : "rebases again from the start";
-    return `${tried}: the next hourly run ${from}; after attempt ${MAX_ATTEMPTS} the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.`;
+    return `${tried}: the job's next run on ${ctx.latestTag} ${from}; after attempt ${MAX_ATTEMPTS} the job waits for a new upstream release or a new commit on ${RELEASE_BRANCH}.`;
   }
   const after = keptUpTo
     ? `; a commit added to the branch carries on from the rebase kept up to ${keptUpTo}`
