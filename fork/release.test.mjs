@@ -1273,7 +1273,13 @@ test("a failed run's notice is an agent's ask naming job.log and the runs folder
     /attempt 3 of 3 for upstream v0\.13\.1 with branch d975b4af3, so the job now waits for a new upstream release or a new commit on fork\/release; a commit added to the branch carries on from the rebase kept up to 6827d2572\./,
   );
   assert.doesNotMatch(lastTry.body, /next hourly run/);
-  ctx.conflict.keptUpTo = null;
+  // A stop whose rebase was gone by the time the job read it is no empty commit.
+  ctx.conflict = { files: [], diff: "", keptUpTo: null, aborted: true };
+  const gone = notice("conflict", undefined, 1, "r").body;
+  assert.match(gone, /the rebase was no longer in progress when the job looked/);
+  assert.doesNotMatch(gone, /no file left unmerged/);
+  ctx.conflict = { files: [], diff: "", keptUpTo: null };
+  assert.match(notice("conflict", undefined, 1, "r").body, /stopped with no file left unmerged/);
   assert.match(
     notice("conflict", undefined, 3, "r").body,
     /so the job now waits for a new upstream release or a new commit on fork\/release\.\n/,
