@@ -1305,6 +1305,8 @@ export const zhCN: TranslationResources = {
       menu: "文件夹操作",
       moveTo: "移到文件夹",
       takeOut: "移出文件夹",
+      moveLooseHere: "将其他所有项目移到这里",
+      landHere: "新项目放到这里",
       create: "新建文件夹…",
       createConfirm: "创建文件夹",
       name: "文件夹名称",

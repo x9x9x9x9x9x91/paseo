@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   createSidebarFolder,
   EMPTY_SIDEBAR_FOLDERS,
+  landNewSidebarProjects,
   mergePersistedSidebarFolders,
+  moveLooseSidebarProjectsToFolder,
   moveSidebarProjectToFolder,
   removeSidebarFolder,
   renameSidebarFolder,
   NO_FOLDS_UNDER_FILTER,
+  setSidebarLandingFolder,
   toggleSidebarFolderCollapsed,
   toggleSidebarFolderFoldUnderFilter,
   type SidebarFoldersState,
@@ -87,8 +90,107 @@ describe("sidebar folders", () => {
       extra: 1,
       folders: [{ id: "workers", name: "Workers", collapsed: true }],
       folderIdByProjectKey: { alma: "workers" },
+      landingFolderId: null,
+      knownProjectKeys: [],
     });
     expect(mergePersistedSidebarFolders({ folders: "nope" }, current)).toBe(current);
+  });
+});
+
+const repo = (viewKey: string) => ({ viewKey, projectKind: "git" });
+const plain = (viewKey: string) => ({ viewKey, projectKind: "non_git" });
+
+describe("filling a folder and landing new projects (ALM-5108)", () => {
+  it("moves every loose repo into the folder and leaves plain folders and other folders' alone", () => {
+    let state = createSidebarFolder(withWorkers(), { id: "music", name: "Music", projectKey: "night" });
+    state = moveLooseSidebarProjectsToFolder(state, "workers", [
+      plain("0sin-chats"),
+      repo("alma"),
+      repo("substrate"),
+      repo("night"),
+      { viewKey: "notes", projectKind: "directory" },
+      repo("crisis"),
+    ]);
+    expect(state.folderIdByProjectKey).toEqual({
+      alma: "workers",
+      night: "music",
+      substrate: "workers",
+      crisis: "workers",
+    });
+    expect(moveLooseSidebarProjectsToFolder(state, "workers", [repo("alma")])).toBe(state);
+    expect(moveLooseSidebarProjectsToFolder(state, "gone", [repo("cleanlane")])).toBe(state);
+  });
+
+  it("lands only a project that appears after the tick, a repo in the folder, a plain one loose", () => {
+    let state = setSidebarLandingFolder(withWorkers(), "workers", ["0sin-chats", "substrate"]);
+    expect(state.landingFolderId).toBe("workers");
+    expect(state.knownProjectKeys).toEqual(["0sin-chats", "substrate", "alma"]);
+    state = landNewSidebarProjects(state, [
+      plain("0sin-chats"),
+      repo("substrate"),
+      repo("alma"),
+      repo("crisis"),
+      plain("new-chats"),
+    ]);
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers", crisis: "workers" });
+    expect(state.knownProjectKeys).toEqual([
+      "0sin-chats",
+      "substrate",
+      "alma",
+      "crisis",
+      "new-chats",
+    ]);
+    const again = landNewSidebarProjects(state, [repo("crisis"), plain("new-chats")]);
+    expect(again).toBe(state);
+  });
+
+  it("keeps a landed project out once it was taken out", () => {
+    let state = setSidebarLandingFolder(withWorkers(), "workers", []);
+    state = landNewSidebarProjects(state, [repo("crisis")]);
+    state = moveSidebarProjectToFolder(state, "crisis", null);
+    expect(landNewSidebarProjects(state, [repo("crisis")])).toBe(state);
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers" });
+  });
+
+  it("lands nothing with no tick, and moves the tick to one folder at a time", () => {
+    const loose = withWorkers();
+    expect(landNewSidebarProjects(loose, [repo("crisis")])).toBe(loose);
+    let state = createSidebarFolder(loose, { id: "music", name: "Music", projectKey: "night" });
+    state = setSidebarLandingFolder(state, "workers", []);
+    state = setSidebarLandingFolder(state, "music", ["crisis"]);
+    expect(state.landingFolderId).toBe("music");
+    expect(state.knownProjectKeys).toEqual(["crisis", "alma", "night"]);
+    state = setSidebarLandingFolder(state, null, []);
+    expect(state.landingFolderId).toBeNull();
+    expect(state.knownProjectKeys).toEqual([]);
+    expect(setSidebarLandingFolder(state, "gone", [])).toBe(state);
+  });
+
+  it("drops the tick with its folder, removed or emptied", () => {
+    const ticked = setSidebarLandingFolder(withWorkers(), "workers", ["crisis"]);
+    expect(removeSidebarFolder(ticked, "workers")).toEqual(EMPTY_SIDEBAR_FOLDERS);
+    expect(moveSidebarProjectToFolder(ticked, "alma", null)).toEqual(EMPTY_SIDEBAR_FOLDERS);
+  });
+
+  it("reads back a stored tick, and none for a folder that is gone or an older build's state", () => {
+    const folders = [{ id: "workers", name: "Workers", collapsed: true }];
+    const stored = mergePersistedSidebarFolders(
+      {
+        folders,
+        folderIdByProjectKey: { alma: "workers" },
+        landingFolderId: "workers",
+        knownProjectKeys: ["alma", "chats"],
+      },
+      EMPTY_SIDEBAR_FOLDERS,
+    );
+    expect(stored.landingFolderId).toBe("workers");
+    expect(stored.knownProjectKeys).toEqual(["alma", "chats"]);
+    const gone = mergePersistedSidebarFolders(
+      { folders, folderIdByProjectKey: {}, landingFolderId: "music", knownProjectKeys: ["x"] },
+      EMPTY_SIDEBAR_FOLDERS,
+    );
+    expect(gone.landingFolderId).toBeNull();
+    expect(gone.knownProjectKeys).toEqual([]);
   });
 });
 
