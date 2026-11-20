@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -37,6 +46,7 @@ import {
   onlyToolsChanged,
   OUTSIDE_STEPS,
   parseStableTag,
+  pruneRuns,
   pathsOutsideScope,
   queueNotice,
   readKeptRebase,
@@ -214,6 +224,45 @@ test("a head ships the published app when it changes only the job's own files, r
   assert.equal(onlyToolsChanged(published, published, { cwd: repo }), false);
   assert.equal(onlyToolsChanged(null, tools, { cwd: repo }), false);
   assert.equal(onlyToolsChanged("0".repeat(40), tools, { cwd: repo }), false);
+});
+
+test("only the newest run with heavy files keeps them, and twenty run folders stay", (t) => {
+  const runs = mkdtempSync(path.join(os.tmpdir(), "fork-runs-"));
+  t.after(() => rmSync(runs, { recursive: true, force: true }));
+  const make = (name, files) => {
+    mkdirSync(path.join(runs, name));
+    writeFileSync(path.join(runs, name, "job.log"), "");
+    for (const file of files) {
+      if (file === "release") mkdirSync(path.join(runs, name, file));
+      else writeFileSync(path.join(runs, name, file), "");
+    }
+  };
+  const has = (name, file) => existsSync(path.join(runs, name, file));
+  // two folders past twenty, a dry run, a later dry run, a real run settled, and this run
+  make("2026-11-01T00-00-00", ["release"]);
+  make("2026-11-01T01-00-00", []);
+  for (let hour = 10; hour < 26; hour++) make(`2026-11-02T${hour}-00-00`, []);
+  make("2026-11-03T00-00-00", ["release", "signed-app.zip"]);
+  make("2026-11-03T01-00-00", ["release", "unsigned-app.zip", "check"]);
+  make("2026-11-03T02-00-00", []);
+  make("2026-11-03T03-00-00", []);
+  pruneRuns(runs);
+  assert.equal(readdirSync(runs).length, 20);
+  assert.equal(has("2026-11-01T00-00-00", "job.log"), false);
+  assert.equal(has("2026-11-03T00-00-00", "release"), false);
+  assert.equal(has("2026-11-03T00-00-00", "signed-app.zip"), false);
+  assert.equal(has("2026-11-03T00-00-00", "job.log"), true);
+  for (const file of ["release", "unsigned-app.zip", "check", "job.log"]) {
+    assert.equal(has("2026-11-03T01-00-00", file), true, file);
+  }
+  // a run with no heavy files leaves the last dry run's alone; one with them takes its place
+  pruneRuns(runs);
+  assert.equal(has("2026-11-03T01-00-00", "release"), true);
+  make("2026-11-03T04-00-00", ["release"]);
+  pruneRuns(runs);
+  assert.equal(has("2026-11-03T01-00-00", "release"), false);
+  assert.equal(has("2026-11-03T01-00-00", "unsigned-app.zip"), false);
+  assert.equal(has("2026-11-03T04-00-00", "release"), true);
 });
 
 test("the fork's own commits are told apart from its features", () => {
