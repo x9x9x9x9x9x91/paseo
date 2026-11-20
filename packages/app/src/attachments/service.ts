@@ -1,13 +1,113 @@
 import { collectRetainedAttachmentIds } from "@/attachments/gc-retention";
+import {
+  createOtherWindowHolds,
+  defaultHoldChannel,
+  defaultWindowCloseSource,
+  type HoldChannel,
+  type OtherWindowHolds,
+} from "@/attachments/other-window-holds";
 import { getAttachmentStore } from "@/attachments/store";
 import type { AttachmentMetadata, SaveAttachmentInput } from "@/attachments/types";
 
+// A save's id reaches its holder (a draft, a screenshot) only after the save returns; another
+// window's sweep in that gap still keeps it (ALM-5125).
+const RECENT_PERSISTENCE_MS = 30_000;
+
 const activePersistence = new Set<Promise<AttachmentMetadata>>();
 const persistedDuringGarbageCollection = new Set<string>();
+const recentlyPersisted = new Map<string, number>();
 let pendingGarbageCollections = 0;
 let garbageCollectionTail: Promise<void> = Promise.resolve();
 let persistenceBarrier: Promise<void> | null = null;
 let releasePersistenceBarrier: (() => void) | null = null;
+let collectWindowAttachmentIds: () => Iterable<string> = () => [];
+let otherWindowHolds: OtherWindowHolds | null = null;
+
+/**
+ * Names every attachment this window holds in memory (drafts, queued messages, screenshots), so
+ * another window's sweep keeps them. The draft store registers it, as it already gathers them for
+ * its own sweep.
+ */
+export function setWindowAttachmentIdsCollector(collect: () => Iterable<string>): void {
+  collectWindowAttachmentIds = collect;
+}
+
+function getOtherWindowHolds(): OtherWindowHolds {
+  otherWindowHolds ??= createOtherWindowHolds({
+    channel: defaultHoldChannel(),
+    closeSource: defaultWindowCloseSource(),
+    holdForPeerSweep,
+  });
+  return otherWindowHolds;
+}
+
+/** Starts answering other windows' sweeps; the app calls it once at start. */
+export function startAnsweringOtherWindowSweeps(): void {
+  getOtherWindowHolds();
+}
+
+/** Test-only hook: this module instance speaks on the given channel, as one app window. */
+export function __useOtherWindowChannelForTests(
+  channel: HoldChannel | null,
+  options: { windowId?: string; replyTimeoutMs?: number } = {},
+): void {
+  otherWindowHolds = channel
+    ? createOtherWindowHolds({ channel, holdForPeerSweep, ...options })
+    : null;
+}
+
+function beginPersistenceHold(): () => void {
+  pendingGarbageCollections += 1;
+  if (!persistenceBarrier) {
+    persistenceBarrier = new Promise<void>((resolve) => {
+      releasePersistenceBarrier = resolve;
+    });
+  }
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pendingGarbageCollections -= 1;
+    if (pendingGarbageCollections === 0) {
+      persistedDuringGarbageCollection.clear();
+      const release = releasePersistenceBarrier;
+      releasePersistenceBarrier = null;
+      persistenceBarrier = null;
+      release?.();
+    }
+  };
+}
+
+async function waitForActivePersistence(): Promise<void> {
+  while (activePersistence.size > 0) {
+    await Promise.allSettled(activePersistence);
+  }
+}
+
+function collectRecentlyPersistedIds(nowMs: number): string[] {
+  for (const [id, persistedAt] of recentlyPersisted) {
+    if (nowMs - persistedAt > RECENT_PERSISTENCE_MS) recentlyPersisted.delete(id);
+  }
+  return Array.from(recentlyPersisted.keys());
+}
+
+async function holdForPeerSweep(): Promise<{
+  heldIds: ReadonlySet<string>;
+  release: () => void;
+}> {
+  const release = beginPersistenceHold();
+  try {
+    await waitForActivePersistence();
+    const heldIds = new Set<string>(collectWindowAttachmentIds());
+    for (const id of collectRetainedAttachmentIds()) heldIds.add(id);
+    for (const id of persistedDuringGarbageCollection) heldIds.add(id);
+    for (const id of collectRecentlyPersistedIds(Date.now())) heldIds.add(id);
+    return { heldIds, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
 
 async function waitForPersistenceBarrier(): Promise<void> {
   const barrier = persistenceBarrier;
@@ -23,6 +123,7 @@ async function persistAttachment(input: SaveAttachmentInput): Promise<Attachment
   const pending = (async () => {
     const store = await getAttachmentStore();
     const attachment = await store.save(input);
+    recentlyPersisted.set(attachment.id, Date.now());
     if (pendingGarbageCollections > 0) {
       persistedDuringGarbageCollection.add(attachment.id);
     }
@@ -164,41 +265,39 @@ export async function deleteAttachments(
 export async function garbageCollectAttachments(input: {
   referencedIds: ReadonlySet<string>;
 }): Promise<void> {
-  pendingGarbageCollections += 1;
-  if (!persistenceBarrier) {
-    persistenceBarrier = new Promise<void>((resolve) => {
-      releasePersistenceBarrier = resolve;
-    });
-  }
+  const releaseHold = beginPersistenceHold();
 
   const previousGarbageCollection = garbageCollectionTail;
   const currentGarbageCollection = (async () => {
     await previousGarbageCollection;
-    while (activePersistence.size > 0) {
-      await Promise.allSettled(activePersistence);
+    await waitForActivePersistence();
+    const otherWindows = await getOtherWindowHolds().beginSweep();
+    if (!otherWindows) {
+      console.warn("[attachments] Skipped a sweep: another app window did not say what it holds");
+      return;
     }
-    const referencedIds = new Set(input.referencedIds);
-    for (const id of collectRetainedAttachmentIds()) {
-      referencedIds.add(id);
+    try {
+      const referencedIds = new Set(input.referencedIds);
+      for (const id of collectRetainedAttachmentIds()) {
+        referencedIds.add(id);
+      }
+      for (const id of persistedDuringGarbageCollection) {
+        referencedIds.add(id);
+      }
+      for (const id of otherWindows.heldIds) {
+        referencedIds.add(id);
+      }
+      const store = await getAttachmentStore();
+      await store.garbageCollect({ referencedIds });
+    } finally {
+      otherWindows.finish();
     }
-    for (const id of persistedDuringGarbageCollection) {
-      referencedIds.add(id);
-    }
-    const store = await getAttachmentStore();
-    await store.garbageCollect({ referencedIds });
   })();
   garbageCollectionTail = currentGarbageCollection.catch(() => undefined);
 
   try {
     await currentGarbageCollection;
   } finally {
-    pendingGarbageCollections -= 1;
-    if (pendingGarbageCollections === 0) {
-      persistedDuringGarbageCollection.clear();
-      const release = releasePersistenceBarrier;
-      releasePersistenceBarrier = null;
-      persistenceBarrier = null;
-      release?.();
-    }
+    releaseHold();
   }
 }
