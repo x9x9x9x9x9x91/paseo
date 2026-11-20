@@ -117,7 +117,10 @@ import {
   type SidebarProjectListItem,
 } from "@/components/sidebar/sidebar-folders";
 import { useSidebarFoldersStore, type SidebarFolder } from "@/stores/sidebar-folders-store";
-import { moveProjectsIntoFolderWithOrder, useSidebarModel } from "@/components/sidebar/sidebar-model";
+import {
+  moveProjectsIntoFolderWithOrder,
+  useSidebarModel,
+} from "@/components/sidebar/sidebar-model";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
 import { useToast } from "@/contexts/toast-context";
 import { getForgePresentation, normalizeForge } from "@/git/forge";

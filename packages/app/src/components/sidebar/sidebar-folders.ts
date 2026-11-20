@@ -130,11 +130,7 @@ export function projectKeysWithProjectsInFolder(input: {
     if (input.folderIdByProjectKey[key] === input.folderId) lastMemberIndex = index;
   });
   if (lastMemberIndex < 0) return [...rest, ...arriving];
-  return [
-    ...rest.slice(0, lastMemberIndex + 1),
-    ...arriving,
-    ...rest.slice(lastMemberIndex + 1),
-  ];
+  return [...rest.slice(0, lastMemberIndex + 1), ...arriving, ...rest.slice(lastMemberIndex + 1)];
 }
 
 /** Projects inside a folded folder: their workspaces are out of sight, like a folded project's. */

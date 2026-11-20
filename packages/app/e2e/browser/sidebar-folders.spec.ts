@@ -260,8 +260,9 @@ test.describe("Sidebar folders", () => {
         seeded.push(notes);
         await expect(workspaceRow(notes.workspaceId)).toBeVisible({ timeout: 30_000 });
         await folderRowNamed(page, "Workers").click();
-        await expect(folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`))
-          .toBeVisible({ timeout: 30_000 });
+        await expect(
+          folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`),
+        ).toBeVisible({ timeout: 30_000 });
         await expect(projectRow(notes.projectKey)).toBeVisible();
         await expect(
           folderMembers.getByTestId(`sidebar-project-row-${notes.projectKey}`),
@@ -276,7 +277,9 @@ test.describe("Sidebar folders", () => {
         ).toHaveCount(0);
         await page.reload();
         await expect(projectRow(crisis.projectKey)).toBeVisible({ timeout: 30_000 });
-        await expect(folderMembers.getByTestId(`sidebar-project-row-${alma.projectKey}`)).toBeVisible();
+        await expect(
+          folderMembers.getByTestId(`sidebar-project-row-${alma.projectKey}`),
+        ).toBeVisible();
         await expect(
           folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`),
         ).toHaveCount(0);
