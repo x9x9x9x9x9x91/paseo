@@ -1316,6 +1316,17 @@ export const zhCN: TranslationResources = {
       description: "添加 setup 命令，让新的 worktree 自动安装依赖并完成准备。",
       openProjectSettings: "打开 project 设置",
     },
+    folder: {
+      menu: "文件夹操作",
+      moveTo: "移到文件夹",
+      takeOut: "移出文件夹",
+      create: "新建文件夹…",
+      createConfirm: "创建文件夹",
+      name: "文件夹名称",
+      rename: "重命名文件夹",
+      renameConfirm: "重命名",
+      remove: "移除文件夹",
+    },
     project: {
       actions: {
         menu: "Project 操作",
