@@ -14,12 +14,13 @@ function createKeepingStore(): AttachmentStore & { stored: Set<string>; released
     stored,
     releasedUrls,
     async save(input): Promise<AttachmentMetadata> {
-      stored.add(input.id);
+      const id = input.id ?? `att_${stored.size + 1}`;
+      stored.add(id);
       return {
-        id: input.id,
-        mimeType: input.mimeType,
+        id,
+        mimeType: input.mimeType ?? "application/octet-stream",
         storageType: "native-file",
-        storageKey: input.id,
+        storageKey: id,
         fileName: input.fileName,
         byteSize: 4,
         createdAt: 1700000000000,
