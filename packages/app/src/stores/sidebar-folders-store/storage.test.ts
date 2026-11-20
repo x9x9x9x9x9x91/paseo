@@ -33,11 +33,18 @@ const OlderBuildEnvelopeSchema = z.strictObject({
 });
 
 const folders = [{ id: "workers", name: "Workers", collapsed: true }];
-const ticked = {
+/** A tick as a build with ALM-5108 and not ALM-5127 stored it in the folders' key. */
+const tickedInFolders = {
   folders,
   folderIdByProjectKey: { alma: "workers" },
   landingFolderId: "workers",
   knownProjectKeys: ["alma", "chats"],
+};
+const ticked = { ...tickedInFolders, knownServerIds: ["mini1"] };
+const storedTick = {
+  landingFolderId: "workers",
+  knownProjectKeys: ["alma", "chats"],
+  knownServerIds: ["mini1"],
 };
 
 function stored(backing: MemoryStorage, key: string): unknown {
@@ -58,7 +65,7 @@ describe("sidebar folders storage", () => {
       version: 0,
     });
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
-      state: { landingFolderId: "workers", knownProjectKeys: ["alma", "chats"] },
+      state: storedTick,
       version: 0,
     });
     await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
@@ -72,36 +79,39 @@ describe("sidebar folders storage", () => {
     const storage = createSidebarFoldersStorage(backing);
     await storage.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, { state: ticked, version: 0 });
     await storage.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, {
-      state: { ...ticked, landingFolderId: null, knownProjectKeys: [] },
+      state: { ...ticked, landingFolderId: null, knownProjectKeys: [], knownServerIds: [] },
       version: 0,
     });
 
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
-      state: { landingFolderId: null, knownProjectKeys: [] },
+      state: { landingFolderId: null, knownProjectKeys: [], knownServerIds: [] },
       version: 0,
     });
   });
 
   it("moves a tick stored in the folders' key to its own key on read, so an older build keeps the folders", async () => {
     const backing = new MemoryStorage();
-    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
+    backing.setItem(
+      SIDEBAR_FOLDERS_STORAGE_KEY,
+      JSON.stringify({ state: tickedInFolders, version: 0 }),
+    );
     const storage = createSidebarFoldersStorage(backing);
     await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
-      state: ticked,
+      state: tickedInFolders,
       version: 0,
     });
 
     const foldersValue = stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY);
     expect(OlderBuildEnvelopeSchema.safeParse(foldersValue).success).toBe(true);
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
-      state: { landingFolderId: "workers", knownProjectKeys: ["alma", "chats"] },
+      state: { ...storedTick, knownServerIds: [] },
       version: 0,
     });
   });
 
   it("still reads the folders when moving the tick out fails, and keeps the tick where it was", async () => {
     const backing = new MemoryStorage();
-    const raw = JSON.stringify({ state: ticked, version: 0 });
+    const raw = JSON.stringify({ state: tickedInFolders, version: 0 });
     backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, raw);
     const full: StateStorage = {
       getItem: (name) => backing.getItem(name),
@@ -115,7 +125,7 @@ describe("sidebar folders storage", () => {
     try {
       const storage = createSidebarFoldersStorage(full);
       await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
-        state: ticked,
+        state: tickedInFolders,
         version: 0,
       });
       expect(backing.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).toBe(raw);
@@ -127,13 +137,16 @@ describe("sidebar folders storage", () => {
 
   it("reads the tick's own key over one in the folders' key, and clears the folders' key", async () => {
     const backing = new MemoryStorage();
-    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
+    backing.setItem(
+      SIDEBAR_FOLDERS_STORAGE_KEY,
+      JSON.stringify({ state: tickedInFolders, version: 0 }),
+    );
     const unticked = { state: { landingFolderId: null, knownProjectKeys: [] }, version: 0 };
     backing.setItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY, JSON.stringify(unticked));
     const storage = createSidebarFoldersStorage(backing);
 
     await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
-      state: { ...ticked, landingFolderId: null, knownProjectKeys: [] },
+      state: { ...tickedInFolders, landingFolderId: null, knownProjectKeys: [] },
       version: 0,
     });
     expect(
@@ -169,7 +182,13 @@ describe("sidebar folders storage", () => {
 
     const reading = storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY);
     await storage.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, {
-      state: { folders: [], folderIdByProjectKey: {}, landingFolderId: null, knownProjectKeys: [] },
+      state: {
+        folders: [],
+        folderIdByProjectKey: {},
+        landingFolderId: null,
+        knownProjectKeys: [],
+        knownServerIds: [],
+      },
       version: 0,
     });
     await expect(reading).resolves.toEqual({ state: ticked, version: 0 });
@@ -219,7 +238,7 @@ describe("sidebar folders storage", () => {
     await reading;
 
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
-      state: { landingFolderId: "workers", knownProjectKeys: ["alma", "chats"] },
+      state: storedTick,
       version: 0,
     });
   });
