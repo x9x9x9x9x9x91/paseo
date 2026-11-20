@@ -7,7 +7,7 @@ import {
   type MigrateLegacyImages,
   PersistedDraftStoreSchema,
 } from "./migration";
-import { isAttachmentMetadata, type DraftRecord } from "./state";
+import { isAttachmentMetadata, isCanonicalDraftInput, type DraftRecord } from "./state";
 
 const passThroughMigrateLegacyImages: MigrateLegacyImages = async (images) =>
   images.filter(isAttachmentMetadata);
@@ -158,6 +158,55 @@ describe("draft-store migration", () => {
     });
 
     expect(migrated.drafts["draft:later"]?.input.text).toBe("still here");
+    expect(backing.values.get("paseo-drafts")).toBe(raw);
+  });
+
+  // A later build's attachment key or kind, or draft state, would fail every draft (ALM-5138).
+  it("keeps what a later build stored that it can read and leaves out only the rest", async () => {
+    const backing = createMemoryStorage();
+    const image: UserComposerAttachment = {
+      kind: "image",
+      metadata: {
+        id: "image-1",
+        mimeType: "image/png",
+        storageType: "web-indexeddb",
+        storageKey: "image-1",
+        createdAt: 1,
+      },
+    };
+    const laterDraft = activeDraft("still here", 5);
+    const laterState = {
+      drafts: {
+        "draft:later": {
+          ...laterDraft,
+          input: {
+            ...laterDraft.input,
+            attachments: [
+              { ...image, metadata: { ...image.metadata, thumbHash: "abc" } },
+              { ...githubIssueAttachment(7), pinned: true },
+              { kind: "voice_note", id: "voice-1" },
+            ],
+          },
+        },
+        "draft:scheduled": { ...activeDraft("later state", 5), lifecycle: "scheduled" },
+      },
+      createModalDraft: { ...activeDraft("modal", 5), lifecycle: "scheduled" },
+    };
+    const raw = JSON.stringify({ state: laterState, version: 5 });
+    backing.values.set("paseo-drafts", raw);
+    const storage = createValidatedPersistStorage(backing, PersistedDraftStoreSchema);
+
+    const stored = await storage.getItem("paseo-drafts");
+
+    const later = stored?.state.drafts?.["draft:later"];
+    const laterInput = later && "input" in later ? later.input : null;
+    expect(laterInput).toEqual({
+      text: "still here",
+      attachments: [image, githubIssueAttachment(7)],
+    });
+    expect(isCanonicalDraftInput(laterInput)).toBe(true);
+    expect(Object.keys(stored?.state.drafts ?? {})).toEqual(["draft:later"]);
+    expect(stored?.state.createModalDraft).toBeNull();
     expect(backing.values.get("paseo-drafts")).toBe(raw);
   });
 

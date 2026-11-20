@@ -2,17 +2,14 @@ import { z } from "zod";
 
 export interface ValidatedStorage {
   getItem(key: string): Promise<string | null>;
-  removeItem(key: string): Promise<void>;
 }
 
-async function clearInvalidValue(storage: ValidatedStorage, key: string): Promise<void> {
-  try {
-    await storage.removeItem(key);
-  } catch {
-    // Invalid persisted data must never cross the boundary, even when cleanup fails.
-  }
-}
-
+/**
+ * Reads of a stored value that return `null` for one that fails its schema and leave it stored:
+ * it may be a later build's value, and removing it would wipe it for that build too (ALM-5138).
+ * Give each a `z.object` schema, never `z.strictObject`, so a key a later build adds reads back
+ * without it instead of failing the read.
+ */
 export async function readValidatedString<Value>(
   storage: ValidatedStorage,
   key: string,
@@ -21,9 +18,7 @@ export async function readValidatedString<Value>(
   const raw = await storage.getItem(key);
   if (raw === null) return null;
   const result = schema.safeParse(raw);
-  if (result.success) return result.data;
-  await clearInvalidValue(storage, key);
-  return null;
+  return result.success ? result.data : null;
 }
 
 export async function readValidatedJson<Value>(
@@ -37,11 +32,8 @@ export async function readValidatedJson<Value>(
   try {
     decoded = JSON.parse(raw);
   } catch {
-    await clearInvalidValue(storage, key);
     return null;
   }
   const result = schema.safeParse(decoded);
-  if (result.success) return result.data;
-  await clearInvalidValue(storage, key);
-  return null;
+  return result.success ? result.data : null;
 }

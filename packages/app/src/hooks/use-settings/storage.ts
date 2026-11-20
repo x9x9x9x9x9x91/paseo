@@ -304,7 +304,8 @@ const StoredAppSettingsSchema = z
         ...DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
         legacyPullRequestsInSidePane: undefined,
       }),
-    pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
+    // Without a catch, a location a later build adds would fail the whole read into the defaults.
+    pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional().catch(undefined),
     attentionProjects: AttentionProjectsSchema,
     // COMPAT(explorerSidebarRouting): replaced by source-specific side-pane preferences in v0.6.
     openSupportingTabsInSidePanel: z.boolean().optional().catch(undefined),
