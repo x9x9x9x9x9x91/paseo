@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hasVisibleOrderChanged, mergeWithRemainder } from "./sidebar-reorder";
+import { hasVisibleOrderChanged, mergeByPosition, mergeWithRemainder } from "./sidebar-reorder";
 
 describe("hasVisibleOrderChanged", () => {
   it("returns false when visible order is unchanged", () => {
@@ -48,5 +48,25 @@ describe("mergeWithRemainder", () => {
         reorderedVisibleKeys: [],
       }),
     ).toEqual(["stale", "hidden"]);
+  });
+});
+
+describe("mergeByPosition", () => {
+  it("puts the reordered keys in the places they had, the other keys staying where they are", () => {
+    expect(
+      mergeByPosition({
+        currentOrder: ["a", "x", "b", "y", "c"],
+        reorderedVisibleKeys: ["c", "a", "b"],
+      }),
+    ).toEqual(["c", "x", "a", "y", "b"]);
+  });
+
+  it("appends reordered keys the current order lacks", () => {
+    expect(
+      mergeByPosition({
+        currentOrder: ["a", "x"],
+        reorderedVisibleKeys: ["new", "a"],
+      }),
+    ).toEqual(["new", "x", "a"]);
   });
 });

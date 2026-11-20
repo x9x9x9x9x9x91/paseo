@@ -1,4 +1,5 @@
-import type { SidebarFolder } from "@/stores/sidebar-folders-store";
+import type { SidebarFolder, SidebarFoldsUnderFilter } from "@/stores/sidebar-folders-store";
+import { mergeByPosition } from "@/utils/sidebar-reorder";
 
 interface ProjectLike {
   viewKey: string;
@@ -75,10 +76,11 @@ export function projectKeysWithFolderReordered<P extends ProjectLike>(
 }
 
 /**
- * The list's project order once `projectKey` goes into `folderId`: after the folder's last
- * project, so the folder keeps its place and the project joins it at the end. A folder with no
- * project in the list yet (a new one) takes the project's own place, and a project already in
- * the folder stays where it is: in both the order is unchanged.
+ * The project order once `projectKey` goes into `folderId`: after the folder's last project, so
+ * the folder keeps its place and the project joins it at the end. A folder with no project in the
+ * order yet (a new one) takes the project's own place, and a project already in the folder stays
+ * where it is: in both the order is unchanged. The sidebar gives it the whole order, not the
+ * list a filter narrows, so a folder whose projects are hidden keeps its place too (ALM-5054).
  */
 export function projectKeysWithProjectInFolder(input: {
   projectKeys: readonly string[];
@@ -102,13 +104,6 @@ export function projectKeysWithProjectInFolder(input: {
   ];
 }
 
-/** The folders that have a row in the list, the only ones a project can be moved into. */
-export function foldersOfListItems<P extends ProjectLike>(
-  items: readonly SidebarProjectListItem<P>[],
-): SidebarFolder[] {
-  return items.flatMap((item) => (item.kind === "folder" ? [item.folder] : []));
-}
-
 /** Projects inside a folded folder: their workspaces are out of sight, like a folded project's. */
 export function projectKeysInCollapsedFolders<P extends ProjectLike>(
   items: readonly SidebarProjectListItem<P>[],
@@ -119,4 +114,105 @@ export function projectKeysInCollapsedFolders<P extends ProjectLike>(
     for (const project of item.projects) keys.add(project.viewKey);
   }
   return keys;
+}
+
+/**
+ * The whole project order once the list, which a filter may have narrowed, was put in a new order
+ * (`listProjectKeys`). Each folder counts as one place, where its first project stands, holding
+ * all of its projects as the list shows it. The places the list shows take its new order among
+ * themselves, and every place it does not show keeps its place; inside a folder its listed
+ * projects do the same around its hidden ones. So a filtered move leaves hidden projects where
+ * they stand and a folder carries its hidden projects along (ALM-5054). A listed project the
+ * order lacks goes at the end.
+ */
+export function projectOrderWithListOrder(input: {
+  currentOrder: readonly string[];
+  listProjectKeys: readonly string[];
+  folders: readonly SidebarFolder[];
+  folderIdByProjectKey: Readonly<Record<string, string>>;
+}): string[] {
+  const placeOf = placeOfProject(input.folders, input.folderIdByProjectKey);
+  const currentPlaces = groupKeysByPlace(input.currentOrder, placeOf);
+  const listPlaces = groupKeysByPlace(input.listProjectKeys, placeOf);
+  const placeOrder = mergeByPosition({
+    currentOrder: [...currentPlaces.keys()],
+    reorderedVisibleKeys: [...listPlaces.keys()],
+  });
+  return placeOrder.flatMap((place) => {
+    const currentKeys = currentPlaces.get(place) ?? [];
+    const listKeys = listPlaces.get(place);
+    if (!listKeys) return currentKeys;
+    return mergeByPosition({ currentOrder: currentKeys, reorderedVisibleKeys: listKeys });
+  });
+}
+
+/**
+ * The project order with each folder's projects side by side where its first one stands, as the
+ * list shows them. A filtered list places a folder at its first listed project, so only an order
+ * kept this way shows a folder in the same place with a filter on as without (ALM-5054).
+ */
+export function projectOrderGroupedByFolder(input: {
+  order: readonly string[];
+  folders: readonly SidebarFolder[];
+  folderIdByProjectKey: Readonly<Record<string, string>>;
+}): string[] {
+  const places = groupKeysByPlace(
+    input.order,
+    placeOfProject(input.folders, input.folderIdByProjectKey),
+  );
+  return [...places.values()].flat();
+}
+
+function placeOfProject(
+  folders: readonly SidebarFolder[],
+  folderIdByProjectKey: Readonly<Record<string, string>>,
+): (key: string) => string {
+  const folderIds = new Set(folders.map((folder) => folder.id));
+  return (key) => {
+    const folderId = folderIdByProjectKey[key];
+    return folderId && folderIds.has(folderId) ? `folder:${folderId}` : `project:${key}`;
+  };
+}
+
+function groupKeysByPlace(
+  keys: readonly string[],
+  placeOf: (key: string) => string,
+): Map<string, string[]> {
+  const places = new Map<string, string[]>();
+  for (const key of keys) {
+    const place = placeOf(key);
+    const members = places.get(place);
+    if (members) members.push(key);
+    else places.set(place, [key]);
+  }
+  return places;
+}
+
+/**
+ * Which project filter is on, as one key: empty when none is. A fold made under a filter belongs
+ * to that filter only.
+ */
+export function projectFilterKeyOf(resolvedProjectFilters: readonly string[]): string {
+  return [...resolvedProjectFilters].sort().join("\n");
+}
+
+/**
+ * The folders as the list shows them. While a project filter is on, every folder shows open, so a
+ * project the filter matches inside a folded folder is in sight, unless it was folded under that
+ * same filter; the saved fold is left as it is and comes back when the filter goes (ALM-5054).
+ */
+export function foldersAsShown(
+  folders: readonly SidebarFolder[],
+  projectFilterKey: string,
+  foldsUnderFilter: SidebarFoldsUnderFilter,
+): readonly SidebarFolder[] {
+  if (!projectFilterKey) return folders;
+  const folded = new Set(
+    foldsUnderFilter.filterKey === projectFilterKey ? foldsUnderFilter.foldedFolderIds : [],
+  );
+  return folders.map((folder) =>
+    folder.collapsed === folded.has(folder.id)
+      ? folder
+      : { ...folder, collapsed: folded.has(folder.id) },
+  );
 }

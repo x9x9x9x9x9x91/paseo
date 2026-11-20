@@ -17,6 +17,7 @@ import {
 } from "@/stores/sidebar-view-store";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import type { SidebarShortcutModel } from "@/utils/sidebar-shortcuts";
+import { foldersAsShown, projectFilterKeyOf } from "./sidebar-folders";
 import { buildSidebarProjection } from "./sidebar-projection";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
@@ -37,6 +38,8 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   allProjects: SidebarProjectEntry[];
   /** The project filter as it is actually being applied — see `resolveActiveProjectFilters`. */
   resolvedProjectFilters: readonly string[];
+  /** `resolvedProjectFilters` as one key, empty when no project filter is on (`projectFilterKeyOf`). */
+  projectFilterKey: string;
   hasProjectsBeforeFilter: boolean;
   groupMode: SidebarGroupMode;
   workspaceGroups: SidebarWorkspaceGroup[];
@@ -74,7 +77,8 @@ export function SidebarModelProvider({
     (state) => state.collapsedWorkspaceGroupKeys,
   );
   const pinnedCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedPinned);
-  const folders = useSidebarFoldersStore((state) => state.folders);
+  const savedFolders = useSidebarFoldersStore((state) => state.folders);
+  const foldsUnderFilter = useSidebarFoldersStore((state) => state.foldsUnderFilter);
   const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
   const pinnedWorkspaceOrder = useSidebarOrderStore((state) => state.pinnedWorkspaceOrder);
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
@@ -99,6 +103,15 @@ export function SidebarModelProvider({
     [projectFilters, list.projects],
   );
   const hasActiveProjectFilter = resolvedProjectFilters.length > 0;
+  const projectFilterKey = useMemo(
+    () => projectFilterKeyOf(resolvedProjectFilters),
+    [resolvedProjectFilters],
+  );
+  // The shortcuts skip a folded folder's workspaces, so they read the folds the list shows.
+  const folders = useMemo(
+    () => foldersAsShown(savedFolders, projectFilterKey, foldsUnderFilter),
+    [foldsUnderFilter, projectFilterKey, savedFolders],
+  );
   // The project filter is deliberately absent from this gate. It reads `projectViewKey`, which
   // lives on the project and the placement, so it can narrow the project list without hydrating
   // anything; the label filter reads `labels`, which only exists on an entry. Hydration opens a
@@ -192,6 +205,7 @@ export function SidebarModelProvider({
       projects: filteredProjects,
       allProjects: list.projects,
       resolvedProjectFilters,
+      projectFilterKey,
       hasProjectsBeforeFilter: list.projects.length > 0,
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       groupMode,
@@ -204,6 +218,7 @@ export function SidebarModelProvider({
     }),
     [
       resolvedProjectFilters,
+      projectFilterKey,
       collapsedProjectKeys,
       groupMode,
       list,
