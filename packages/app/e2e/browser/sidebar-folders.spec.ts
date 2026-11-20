@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { test } from "../support/fixtures";
 import { gotoAppShell } from "../support/helpers/app";
 import { seedWorkspace } from "../support/helpers/seed-client";
@@ -18,6 +18,32 @@ async function openMoveToFolder(page: Page, projectKey: string) {
 
 function folderRow(page: Page) {
   return page.locator('[data-testid^="sidebar-folder-row-"]');
+}
+
+// The New folder page can mount again as it opens and drop the typed name, which leaves Create
+// disabled, so the name is typed again until Create takes it.
+async function createFolderFromMenu(page: Page, name: string) {
+  const nameField = page.getByTestId("sidebar-folder-create-name");
+  const submit = page.getByTestId("sidebar-folder-create-submit");
+  await page.getByTestId("sidebar-folder-create").click();
+  await expect(async () => {
+    await nameField.fill(name);
+    await expect(submit).toBeEnabled({ timeout: 1_000 });
+  }).toPass();
+  await submit.click();
+}
+
+function folderRowNamed(page: Page, name: string) {
+  return folderRow(page).filter({ hasText: name });
+}
+
+async function expectAbove(upper: Locator, lower: Locator) {
+  await expect
+    .poll(async () => {
+      const [upperBox, lowerBox] = await Promise.all([upper.boundingBox(), lower.boundingBox()]);
+      return upperBox !== null && lowerBox !== null && upperBox.y < lowerBox.y;
+    })
+    .toBe(true);
 }
 
 test.describe("Sidebar folders", () => {
@@ -167,6 +193,72 @@ test.describe("Sidebar folders", () => {
       await substrate.cleanup();
       await alma.cleanup();
       await chats.cleanup();
+    }
+  });
+
+  // A project taken from the middle of a folder, loose or into a new folder, must not split that
+  // folder in the project order: a filter showing it beside a later member would then put the
+  // folder below it (ALM-5055).
+  test("a folder keeps its place under a filter after a middle project leaves it", async ({
+    page,
+  }, testInfo) => {
+    const first = await seedWorkspace({ repoPrefix: "folders-regroup-first-", title: "First" });
+    const second = await seedWorkspace({ repoPrefix: "folders-regroup-second-", title: "Second" });
+    const third = await seedWorkspace({ repoPrefix: "folders-regroup-third-", title: "Third" });
+    const fourth = await seedWorkspace({ repoPrefix: "folders-regroup-fourth-", title: "Fourth" });
+    const serverId = getServerId();
+    const workspaceRow = (workspaceId: string) =>
+      page.getByTestId(`sidebar-workspace-row-${serverId}:${workspaceId}`);
+    const projectRow = (projectKey: string) =>
+      page.getByTestId(`sidebar-project-row-${projectKey}`);
+    const sidebar = page.getByTestId("sidebar-project-workspace-list-scroll").first();
+    const filterTo = async (projectKeys: string[]) => {
+      await openSidebarProjectFilter(page);
+      await selectAllProjectsFilter(page);
+      for (const projectKey of projectKeys) await toggleProjectFilter(page, projectKey);
+      await closeSidebarDisplayPreferences(page);
+    };
+
+    try {
+      await gotoAppShell(page);
+      for (const workspace of [first, second, third, fourth]) {
+        await expect(workspaceRow(workspace.workspaceId)).toBeVisible({ timeout: 30_000 });
+      }
+      await openMoveToFolder(page, first.projectKey);
+      await createFolderFromMenu(page, "Workers");
+      for (const project of [second, third, fourth]) {
+        await openMoveToFolder(page, project.projectKey);
+        await page.getByRole("menuitem", { name: "Workers" }).click();
+        await expect(projectRow(project.projectKey)).toHaveCount(0);
+      }
+      await folderRowNamed(page, "Workers").click();
+      await expect(projectRow(second.projectKey)).toBeVisible();
+
+      await test.step("a middle project taken out leaves the folder whole", async () => {
+        await openMoveToFolder(page, second.projectKey);
+        await page.getByTestId("sidebar-folder-take-out").click();
+        await filterTo([second.projectKey, third.projectKey]);
+        await expect(projectRow(third.projectKey)).toBeVisible();
+        await expectAbove(folderRowNamed(page, "Workers"), projectRow(second.projectKey));
+        await sidebar.screenshot({ path: testInfo.outputPath("regroup-1-taken-out.png") });
+      });
+
+      await test.step("a new folder from a middle project leaves the old one whole", async () => {
+        await filterTo([]);
+        await expect(projectRow(third.projectKey)).toBeVisible();
+        await openMoveToFolder(page, third.projectKey);
+        await createFolderFromMenu(page, "Lanes");
+        await expect(folderRowNamed(page, "Lanes")).toHaveCount(1);
+        await filterTo([third.projectKey, fourth.projectKey]);
+        await expect(projectRow(fourth.projectKey)).toBeVisible();
+        await expectAbove(folderRowNamed(page, "Workers"), folderRowNamed(page, "Lanes"));
+        await sidebar.screenshot({ path: testInfo.outputPath("regroup-2-new-folder.png") });
+      });
+    } finally {
+      await fourth.cleanup();
+      await third.cleanup();
+      await second.cleanup();
+      await first.cleanup();
     }
   });
 });
