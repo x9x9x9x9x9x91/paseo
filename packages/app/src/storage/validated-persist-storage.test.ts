@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { StateStorage } from "zustand/middleware";
-import { createValidatedPersistStorage } from "./validated-persist-storage";
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import {
+  createValidatedPersistStorage,
+  keepStoredState,
+  readableEntries,
+  readableRecordEntries,
+} from "./validated-persist-storage";
 
 class MemoryStorage implements StateStorage {
   readonly values = new Map<string, string>();
@@ -22,16 +29,17 @@ class MemoryStorage implements StateStorage {
 const StateSchema = z.object({ enabled: z.boolean() });
 
 describe("createValidatedPersistStorage", () => {
+  // A value this build cannot read may be a later build's: removing it would wipe it (ALM-5138).
   it.each([
     ["malformed JSON", "{"],
     ["invalid state", JSON.stringify({ state: { enabled: "yes" }, version: 1 })],
-  ])("clears %s", async (_label, stored) => {
+  ])("reads %s as none and keeps it", async (_label, stored) => {
     const backing = new MemoryStorage();
     backing.values.set("settings", stored);
     const storage = createValidatedPersistStorage(backing, StateSchema);
 
     await expect(storage.getItem("settings")).resolves.toBeNull();
-    expect(backing.values.has("settings")).toBe(false);
+    expect(backing.values.get("settings")).toBe(stored);
   });
 
   // An older build reading what a later one stored: removing it would wipe the store (ALM-5127).
@@ -124,7 +132,7 @@ it("retries an unchanged state after a failed save", async () => {
   expect(backing.getItem("layout")).toBe(JSON.stringify(value));
 });
 
-it("saves the same state again after removal or rehydration clears invalid storage", async () => {
+it("saves the same state again after removal or a read of an unreadable value", async () => {
   const backing = new MemoryStorage();
   const storage = createValidatedPersistStorage(backing, StateSchema, { skipUnchanged: true });
   const value = { state: { enabled: true }, version: 1 };
@@ -137,4 +145,60 @@ it("saves the same state again after removal or rehydration clears invalid stora
   await expect(storage.getItem("layout")).resolves.toBeNull();
   await storage.setItem("layout", value);
   expect(backing.getItem("layout")).toBe(JSON.stringify(value));
+});
+
+describe("a store with no migrations of its own", () => {
+  function createStore(backing: MemoryStorage) {
+    return create<{ enabled: boolean }>()(
+      persist((): { enabled: boolean } => ({ enabled: false }), {
+        name: "settings",
+        version: 1,
+        storage: createValidatedPersistStorage(backing, StateSchema),
+        migrate: keepStoredState<{ enabled: boolean }>,
+      }),
+    );
+  }
+
+  // A later build that raises the version: without a migrate, zustand drops the state (ALM-5138).
+  it.each([
+    ["a later build", 2],
+    ["an earlier build", 0],
+  ])("keeps the state %s stored under another version", async (_label, version) => {
+    const backing = new MemoryStorage();
+    backing.values.set("settings", JSON.stringify({ state: { enabled: true }, version }));
+    const store = createStore(backing);
+
+    await store.persist.rehydrate();
+
+    expect(store.getState().enabled).toBe(true);
+  });
+});
+
+describe("readable entries", () => {
+  const Entry = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("file"), path: z.string() }),
+    z.object({ kind: z.literal("image"), id: z.string() }),
+  ]);
+
+  it("drops the entries of a kind it does not know and keeps the rest", () => {
+    expect(
+      readableEntries(Entry).parse([
+        { kind: "file", path: "a.ts" },
+        { kind: "plugin", id: "later" },
+        { kind: "image", id: "1", later: true },
+      ]),
+    ).toEqual([
+      { kind: "file", path: "a.ts" },
+      { kind: "image", id: "1" },
+    ]);
+  });
+
+  it("drops the record values of a kind it does not know and keeps the rest", () => {
+    expect(
+      readableRecordEntries(Entry).parse({
+        a: { kind: "file", path: "a.ts" },
+        b: { kind: "plugin", id: "later" },
+      }),
+    ).toEqual({ a: { kind: "file", path: "a.ts" } });
+  });
 });

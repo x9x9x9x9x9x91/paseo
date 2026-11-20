@@ -262,8 +262,20 @@ describe("create agent preferences", () => {
     ).toEqual({ provider: "codex", providerPreferences: { codex: { options } } });
   });
 
-  it("rejects unknown persisted fields outside the explicit legacy shape", () => {
-    expect(parseFormPreferences({ provider: "codex", surprise: true })).toEqual({});
+  // An older build reading what a later one stored keeps everything it knows (ALM-5138).
+  it("reads a field a later build added without it", () => {
+    expect(
+      parseFormPreferences({
+        provider: "codex",
+        surprise: true,
+        providerPreferences: { codex: { model: "gpt-5.4-mini", effort: "high" } },
+        favoriteModels: [{ provider: "claude", modelId: "opus", pinned: true }],
+      }),
+    ).toEqual({
+      provider: "codex",
+      providerPreferences: { codex: { model: "gpt-5.4-mini" } },
+      favoriteModels: [{ provider: "claude", modelId: "opus" }],
+    });
   });
 
   it("persists and reloads the workspace isolation choice", async () => {
@@ -298,8 +310,10 @@ describe("create agent preferences", () => {
     expect(parseFormPreferences({ provider: "codex" }).isolation).toBeUndefined();
   });
 
-  it("rejects an unknown isolation value as invalid stored preferences", () => {
-    expect(parseFormPreferences({ provider: "codex", isolation: "sandbox" })).toEqual({});
+  it("reads an unknown isolation value as no isolation choice and keeps the rest", () => {
+    expect(parseFormPreferences({ provider: "codex", isolation: "sandbox" })).toEqual({
+      provider: "codex",
+    });
   });
 
   it("persists and reloads a terminal launch target", async () => {
@@ -323,11 +337,13 @@ describe("create agent preferences", () => {
     expect(parseFormPreferences({ provider: "codex" }).launchTarget).toBeUndefined();
   });
 
-  it("rejects a terminal launch target missing a profileId as invalid stored preferences", () => {
+  it("reads a terminal launch target missing a profileId as no launch target", () => {
     expect(parseFormPreferences({ launchTarget: { kind: "terminal" } })).toEqual({});
   });
 
-  it("rejects an unknown launch target kind as invalid stored preferences", () => {
-    expect(parseFormPreferences({ launchTarget: { kind: "shell" } })).toEqual({});
+  it("reads an unknown launch target kind as no launch target and keeps the rest", () => {
+    expect(parseFormPreferences({ provider: "codex", launchTarget: { kind: "shell" } })).toEqual({
+      provider: "codex",
+    });
   });
 });

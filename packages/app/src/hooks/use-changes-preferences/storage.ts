@@ -6,11 +6,13 @@ export const CHANGES_PREFERENCES_STORAGE_KEY = "@paseo:changes-preferences";
 export const LEGACY_WRAP_LINES_STORAGE_KEY = "diff-wrap-lines";
 export const CHANGES_PREFERENCES_QUERY_KEY = ["changes-preferences"];
 
-const changesPreferencesSchema = z.strictObject({
-  layout: z.enum(["unified", "split"]).optional(),
+// Read loosely, and a choice this build does not know reads as unset, so preferences a later
+// build stored keep everything else on an older one (ALM-5138).
+const changesPreferencesSchema = z.object({
+  layout: z.enum(["unified", "split"]).optional().catch(undefined),
   desktopTreeVisible: z.boolean().optional(),
   // Read the former overloaded preference once so existing installations keep their desktop tree.
-  viewMode: z.enum(["flat", "tree"]).optional(),
+  viewMode: z.enum(["flat", "tree"]).optional().catch(undefined),
   wrapLines: z.boolean().optional(),
   hideWhitespace: z.boolean().optional(),
   inlineDiff: z.boolean().optional(),
@@ -63,6 +65,7 @@ export async function loadChangesPreferencesFromStorage(
     return {
       ...DEFAULT_CHANGES_PREFERENCES,
       ...currentPreferences,
+      layout: stored.layout ?? DEFAULT_CHANGES_PREFERENCES.layout,
       desktopTreeVisible: stored.desktopTreeVisible ?? viewMode === "tree",
     };
   }

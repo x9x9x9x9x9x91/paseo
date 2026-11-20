@@ -53,7 +53,9 @@ export interface DraftStoreState {
   createModalDraft: DraftRecord | null;
 }
 
-export const AttachmentMetadataSchema = z.strictObject({
+// The attachment shapes read a key a later build adds without it, so a stored draft keeps its
+// attachments on an older build; the draft input itself stays strict below (ALM-5138).
+export const AttachmentMetadataSchema = z.object({
   id: z.string(),
   mimeType: z.string(),
   storageType: z.enum(["web-indexeddb", "desktop-file", "native-file"]),
@@ -62,11 +64,11 @@ export const AttachmentMetadataSchema = z.strictObject({
   byteSize: z.number().nullable().optional(),
   createdAt: z.number(),
 }) satisfies z.ZodType<AttachmentMetadata>;
-export const LegacyDraftImageSchema: z.ZodType<LegacyDraftImage> = z.strictObject({
+export const LegacyDraftImageSchema: z.ZodType<LegacyDraftImage> = z.object({
   uri: z.string(),
   mimeType: z.string().optional(),
 });
-const UploadedFileSchema = z.strictObject({
+const UploadedFileSchema = z.object({
   type: z.literal("uploaded_file"),
   id: z.string(),
   fileName: z.string(),
@@ -87,39 +89,40 @@ const ForgeItemFields = {
   headRefName: z.string().nullable().optional(),
   updatedAt: z.string().optional(),
 };
-const IssueItemSchema = z.strictObject({ kind: z.literal("issue"), ...ForgeItemFields });
-const ChangeRequestItemSchema = z.strictObject({
+const IssueItemSchema = z.object({ kind: z.literal("issue"), ...ForgeItemFields });
+const ChangeRequestItemSchema = z.object({
   kind: z.literal("change_request"),
   ...ForgeItemFields,
 });
 export const UserComposerAttachmentSchema: z.ZodType<UserComposerAttachment> = z.discriminatedUnion(
   "kind",
   [
-    z.strictObject({ kind: z.literal("image"), metadata: AttachmentMetadataSchema }),
-    z.strictObject({ kind: z.literal("file"), attachment: UploadedFileSchema }),
-    z.strictObject({
+    z.object({ kind: z.literal("image"), metadata: AttachmentMetadataSchema }),
+    z.object({ kind: z.literal("file"), attachment: UploadedFileSchema }),
+    z.object({
       kind: z.literal("workspace_file"),
       path: z.string(),
       selection: z.discriminatedUnion("kind", [
-        z.strictObject({ kind: z.literal("whole_file") }),
-        z.strictObject({
+        z.object({ kind: z.literal("whole_file") }),
+        z.object({
           kind: z.literal("line_range"),
           startLine: z.number().int().positive(),
           endLine: z.number().int().positive(),
         }),
       ]),
     }),
-    z.strictObject({ kind: z.literal("forge_issue"), item: IssueItemSchema }),
-    z.strictObject({ kind: z.literal("forge_change_request"), item: ChangeRequestItemSchema }),
-    z.strictObject({ kind: z.literal("github_issue"), item: IssueItemSchema }),
+    z.object({ kind: z.literal("forge_issue"), item: IssueItemSchema }),
+    z.object({ kind: z.literal("forge_change_request"), item: ChangeRequestItemSchema }),
+    z.object({ kind: z.literal("github_issue"), item: IssueItemSchema }),
     PluginResourceComposerAttachmentSchema,
-    z.strictObject({
+    z.object({
       kind: z.literal("github_pr"),
       item: ChangeRequestItemSchema,
       owner: z.literal(NEW_WORKSPACE_PICKER_ATTACHMENT_OWNER).optional(),
     }),
   ],
 );
+// Strict: a legacy input's `images` key marks it for migration (`migrateAllLegacyDrafts`).
 export const CanonicalDraftInputSchema = z.strictObject({
   text: z.string(),
   attachments: z.array(UserComposerAttachmentSchema),

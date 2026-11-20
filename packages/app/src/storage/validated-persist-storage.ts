@@ -2,10 +2,13 @@ import { z } from "zod";
 import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 
 /**
- * A persisted store's storage that drops a stored value it cannot parse. Give it a `z.object`
- * state schema, never `z.strictObject`: a key a later build adds then reads back without it,
- * where a strict schema fails the parse and this storage removes the whole value, so opening an
- * older build would wipe the store (ALM-5127). The envelope reads loosely for the same reason.
+ * A persisted store's storage that reads a stored value it cannot parse as none and leaves it
+ * stored: it may be a later build's, and removing it would wipe the store for that build too
+ * (ALM-5138). Give it a `z.object` state schema, never `z.strictObject`, so a key a later build
+ * adds reads back without it instead of failing the read (ALM-5127); the envelope reads loosely
+ * for the same reason. A list or record whose entries a later build may add kinds to reads them
+ * with `readableEntries` / `readableRecordEntries`. A store with no migrations of its own passes
+ * `migrate: keepStoredState`.
  */
 export function createValidatedPersistStorage<State>(
   backingStorage: StateStorage,
@@ -29,16 +32,11 @@ export function createValidatedPersistStorage<State>(
     try {
       decoded = JSON.parse(raw);
     } catch {
-      await backingStorage.removeItem(name);
       return null;
     }
 
     const result = envelopeSchema.safeParse(decoded);
-    if (!result.success) {
-      await backingStorage.removeItem(name);
-      return null;
-    }
-    return result.data;
+    return result.success ? result.data : null;
   }
 
   return {
@@ -83,4 +81,39 @@ export function createValidatedPersistStorage<State>(
       return backingStorage.removeItem(name);
     },
   };
+}
+
+/**
+ * The `migrate` of a persisted store with no migrations of its own. Without one, zustand drops a
+ * stored state whose version is not the store's, so a later build that raises the version would
+ * leave an older build with the defaults, written over the store at its next change (ALM-5138).
+ * The storage has parsed the state against the store's schema already.
+ */
+export function keepStoredState<State>(persistedState: unknown): State {
+  return persistedState as State;
+}
+
+/**
+ * A stored list that drops each entry its schema cannot read and keeps the rest: an entry a later
+ * build wrote, such as one of a new kind, would otherwise fail the whole stored value (ALM-5138).
+ */
+export function readableEntries<Entry extends z.ZodType>(entry: Entry) {
+  return z.array(z.unknown()).transform((items) =>
+    items.flatMap((item) => {
+      const result = entry.safeParse(item);
+      return result.success ? [result.data] : [];
+    }),
+  );
+}
+
+/** `readableEntries` for a stored record: drops each value its schema cannot read (ALM-5138). */
+export function readableRecordEntries<Entry extends z.ZodType>(entry: Entry) {
+  return z.record(z.string(), z.unknown()).transform((items) => {
+    const readable: Record<string, z.output<Entry>> = {};
+    for (const [key, item] of Object.entries(items)) {
+      const result = entry.safeParse(item);
+      if (result.success) readable[key] = result.data;
+    }
+    return readable;
+  });
 }

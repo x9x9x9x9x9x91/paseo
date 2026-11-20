@@ -37,6 +37,19 @@ describe("loadChangesPreferencesFromStorage", () => {
     expect(storage.entries.get(CHANGES_PREFERENCES_STORAGE_KEY)).toBe(JSON.stringify(result));
   });
 
+  // An older build reading what a later one stored keeps everything it knows (ALM-5138).
+  it("reads a later build's layout and keys as the default and keeps the rest stored", async () => {
+    const persisted = JSON.stringify({ layout: "stacked", wrapLines: true, minimap: true });
+    const storage = createInMemoryKeyValueStorage({
+      [CHANGES_PREFERENCES_STORAGE_KEY]: persisted,
+    });
+
+    const result = await loadChangesPreferencesFromStorage(storage);
+
+    expect(result).toEqual({ ...DEFAULT_CHANGES_PREFERENCES, wrapLines: true });
+    expect(storage.entries.get(CHANGES_PREFERENCES_STORAGE_KEY)).toBe(persisted);
+  });
+
   it("loads persisted layout and whitespace preferences without rewriting storage", async () => {
     const persisted = JSON.stringify({
       layout: "split",
