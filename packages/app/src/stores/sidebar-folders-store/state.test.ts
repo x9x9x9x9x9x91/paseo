@@ -9,6 +9,7 @@ import {
   removeSidebarFolder,
   renameSidebarFolder,
   NO_FOLDS_UNDER_FILTER,
+  persistedSidebarFolders,
   setSidebarLandingFolder,
   toggleSidebarFolderCollapsed,
   toggleSidebarFolderFoldUnderFilter,
@@ -174,6 +175,21 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
     const ticked = setSidebarLandingFolder(withWorkers(), "workers", ["crisis"]);
     expect(removeSidebarFolder(ticked, "workers")).toEqual(EMPTY_SIDEBAR_FOLDERS);
     expect(moveSidebarProjectToFolder(ticked, "alma", null)).toEqual(EMPTY_SIDEBAR_FOLDERS);
+  });
+
+  it("stores the landing keys only while a folder is ticked, so an older build reads the rest", () => {
+    const loose = withWorkers();
+    expect(persistedSidebarFolders(loose)).toEqual({
+      folders: loose.folders,
+      folderIdByProjectKey: loose.folderIdByProjectKey,
+    });
+    const ticked = setSidebarLandingFolder(loose, "workers", ["chats"]);
+    expect(persistedSidebarFolders(ticked)).toEqual({
+      folders: loose.folders,
+      folderIdByProjectKey: loose.folderIdByProjectKey,
+      landingFolderId: "workers",
+      knownProjectKeys: ["chats", "alma"],
+    });
   });
 
   it("reads back a stored tick, and none for a folder that is gone or an older build's state", () => {
