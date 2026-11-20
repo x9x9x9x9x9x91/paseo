@@ -275,12 +275,15 @@ export function AnchoredSurface({
 
   useWebContentEntering({ placed, surfaceNativeID });
 
+  // Placement focuses the first enabled row, unless focus already sits inside the surface: a
+  // page's autofocused field, such as a folder's Rename name, keeps it (ALM-5057).
   useEffect(() => {
     if (!isWeb || !open || !placed || typeof document === "undefined") return undefined;
     const frame = requestAnimationFrame(() => {
-      document
-        .getElementById(surfaceNativeID)
-        ?.querySelector<HTMLElement>('[data-menu-item="true"]:not([data-menu-disabled="true"])')
+      const surface = document.getElementById(surfaceNativeID);
+      if (!surface || surface.contains(document.activeElement)) return;
+      surface
+        .querySelector<HTMLElement>('[data-menu-item="true"]:not([data-menu-disabled="true"])')
         ?.focus();
     });
     return () => cancelAnimationFrame(frame);

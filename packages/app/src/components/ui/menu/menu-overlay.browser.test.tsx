@@ -95,6 +95,10 @@ function mountMenuAbovePill(body: ReactNode): void {
 
 let mounts = 0;
 
+function ignoreText(_value: string): void {}
+
+function ignoreSelect(): void {}
+
 /** Counts its own mounts, the way a page's typed name lives and dies with its component. */
 function CountsMounts() {
   useEffect(() => {
@@ -144,6 +148,29 @@ describe("anchored menu surface on web", () => {
     const panel = element("panel").getBoundingClientRect();
     expect(panel.bottom).toBeLessThanOrEqual(pill.top);
     expect(mounts).toBe(1);
+  });
+
+  // A page whose field took focus as it mounted keeps it once placed, rather than handing it to
+  // its first enabled row, as on a folder's Rename page (ALM-5057).
+  it("leaves focus in an autofocused field once placed", async () => {
+    mountMenuAbovePill(
+      <>
+        <MenuTextField
+          initialValue="Workers"
+          onChangeText={ignoreText}
+          placeholder="Name"
+          autoFocus
+          testID="field"
+        />
+        <MenuItem onSelect={ignoreSelect} testID="confirm">
+          Rename
+        </MenuItem>
+      </>,
+    );
+
+    await wait(SETTLE_MS);
+
+    expect(document.activeElement).toBe(element("field"));
   });
 });
 
