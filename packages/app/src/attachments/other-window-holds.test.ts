@@ -388,6 +388,62 @@ describe("attachment sweeps across app windows", () => {
     expect(Array.from(shared.ids)).toEqual(["screenshot"]);
   });
 
+  it("has a window opened while the only other window sweeps hold its saves", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle(30);
+    const openSweep = shared.gateSweeps();
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle();
+    const windowA = await openWindow(bus.channel(), shared.store);
+    await settle();
+    const save = windowA.persistAttachmentFromBytes({ id: "saved-in-new-window", ...bytes });
+    await settle();
+    expect(shared.saves).toEqual([]);
+    openSweep();
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids)).toEqual(["saved-in-new-window"]);
+  });
+
+  it("has a window opened while the sweep asks hold its saves until the sweep ends", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 500 });
+    // Window C pongs at once and replies to a request only on the test's word.
+    const windowC = bus.channel();
+    const seen: { request?: { from: string; sweepId: string } } = {};
+    windowC.addEventListener("message", ({ data }) => {
+      const message = data as { type: string; from: string; sweepId: string };
+      if (message.type === "ping") {
+        windowC.send({ type: "pong", from: "c", to: message.from, sweepId: message.sweepId });
+      }
+      if (message.type === "request") seen.request = message;
+    });
+    windowC.send({ type: "hello", from: "c" });
+    await settle(30);
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle(10);
+    if (!seen.request) throw new Error("B did not ask");
+    const windowA = await openWindow(bus.channel(), shared.store);
+    await settle();
+    const save = windowA.persistAttachmentFromBytes({ id: "saved-in-new-window", ...bytes });
+    await settle();
+    windowC.send({
+      type: "reply",
+      from: "c",
+      to: seen.request.from,
+      sweepId: seen.request.sweepId,
+      ids: [],
+    });
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids)).toEqual(["saved-in-new-window"]);
+  });
+
   it("is asked again once the browser shows it again after leaving", async () => {
     const bus = createBus();
     const shared = createSharedStore(["screenshot", "orphan"]);

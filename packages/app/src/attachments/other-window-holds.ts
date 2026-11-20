@@ -109,8 +109,9 @@ export function createOtherWindowHolds(params: {
   let closing = false;
   const pendingSweeps = new Map<string, PendingSweep>();
   const activeSweepIds = new Set<string>();
-  // Sweeps past their request phase, about to list the store.
-  const listingSweepIds = new Set<string>();
+  // Sweeps past their ping (or with no one to ping), from their request until done: a window
+  // opened then is asked too.
+  const askingSweepIds = new Set<string>();
   const heldForPeers = new Map<string, () => void>();
   let sweepCounter = 0;
 
@@ -212,8 +213,9 @@ export function createOtherWindowHolds(params: {
       case "hello":
         peers.add(message.from);
         post({ type: "here", from: windowId });
-        // A window opened while this one lists the store holds its saves until it is done.
-        for (const sweepId of listingSweepIds) {
+        // A window opened after this one's request holds its saves until the sweep is done; one
+        // opened during the ping gets the request with the others.
+        for (const sweepId of askingSweepIds) {
           post({ type: "request", from: windowId, sweepId });
         }
         return;
@@ -287,11 +289,12 @@ export function createOtherWindowHolds(params: {
       const sweepId = `${windowId}:${sweepCounter}`;
       activeSweepIds.add(sweepId);
       const finish = () => {
-        listingSweepIds.delete(sweepId);
+        askingSweepIds.delete(sweepId);
         if (!activeSweepIds.delete(sweepId)) return;
         post({ type: "done", from: windowId, sweepId });
       };
       if (peers.size === 0) {
+        askingSweepIds.add(sweepId);
         return { heldIds: new Set(), isHeld: () => true, finish };
       }
 
@@ -314,12 +317,12 @@ export function createOtherWindowHolds(params: {
       const waitingOn = new Set(peers);
       const heldIds = new Set<string>();
       const requestedAt = Date.now();
+      askingSweepIds.add(sweepId);
       await collectAnswers("request", sweepId, waitingOn, heldIds, () =>
         post({ type: "request", from: windowId, sweepId }),
       );
 
       if (waitingOn.size > 0) return missAll(waitingOn);
-      listingSweepIds.add(sweepId);
       const isHeld = () => Date.now() - requestedAt < holdTimeoutMs / 2;
       return { heldIds, isHeld, finish };
     },
