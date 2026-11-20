@@ -66,6 +66,13 @@ import {
 import { isSheetTabModified, resolveCompactSheetPolicy } from "@/workspace-tabs/compact-sheet";
 import { panelResourceKey, type CompactSheetPolicy } from "@/panels/panel-manifest";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import {
+  changedStoredKeys,
+  defaultStorageEventSource,
+  followOtherWindowsWritesByKey,
+  type OtherWindowsWrites,
+  type StorageEventSource,
+} from "@/storage/follow-other-windows";
 import { panelTargetSupportsHostForWorkspaceKey } from "@/plugins/workspace-panels/locations";
 
 export {
@@ -1039,11 +1046,63 @@ function advancePanelRevision(
   };
 }
 
+/** The workspaces whose stored entry, in any stored map, differs between two stored states. */
+function changedWorkspaceKeys(before: Record<string, unknown>, stored: unknown): Set<string> {
+  const storedState =
+    stored && typeof stored === "object" ? (stored as Record<string, unknown>) : {};
+  const changed = new Set<string>();
+  for (const slice of new Set([...Object.keys(before), ...Object.keys(storedState)])) {
+    for (const key of changedStoredKeys(before[slice], storedState[slice])) changed.add(key);
+  }
+  return changed;
+}
+
+/**
+ * Takes in only the workspaces other app windows changed, and keeps every other workspace's
+ * layout this window's own object, its unstored tabs (a commit diff) included, so another
+ * window's write does not rebuild what this window shows (ALM-5115). A workspace both windows
+ * show follows the window that changed it last.
+ */
+function followOtherWindowsLayout(
+  getOtherWindowsWrites: () => OtherWindowsWrites | null,
+  mergeStored: (
+    persistedState: unknown,
+    currentState: WorkspaceLayoutStore,
+  ) => WorkspaceLayoutStore,
+) {
+  return (persistedState: unknown, currentState: WorkspaceLayoutStore): WorkspaceLayoutStore => {
+    const merged = mergeStored(persistedState, currentState);
+    const before = getOtherWindowsWrites()?.takeStateBefore();
+    if (!before || merged === currentState) return merged;
+    const changed = changedWorkspaceKeys(before, persistedState);
+    if (changed.size === 0) return currentState;
+    const next: Record<string, unknown> = { ...merged };
+    for (const slice of PERSISTED_SLICES) {
+      const own = currentState[slice] as Record<string, unknown>;
+      const fromStorage = merged[slice] as Record<string, unknown>;
+      const keys = new Set([...Object.keys(own), ...Object.keys(fromStorage)]);
+      if (![...keys].some((key) => changed.has(key))) {
+        next[slice] = own;
+        continue;
+      }
+      const picked: Record<string, unknown> = {};
+      for (const key of keys) {
+        const source = changed.has(key) ? fromStorage : own;
+        if (Object.hasOwn(source, key)) picked[key] = source[key];
+      }
+      next[slice] = picked;
+    }
+    return next as unknown as WorkspaceLayoutStore;
+  };
+}
+
 export function createWorkspaceLayoutStore(
   ids: WorkspaceLayoutIdSource = defaultWorkspaceLayoutIds,
   storage: StateStorage = AsyncStorage,
+  otherWindowsSource: StorageEventSource | null = null,
 ) {
-  return create<WorkspaceLayoutStore>()(
+  let otherWindowsWrites: OtherWindowsWrites | null = null;
+  const store = create<WorkspaceLayoutStore>()(
     persist(
       (set, get) => ({
         autoOpenPullRequestTab: (workspaceKey, resolvePlacement) => {
@@ -2315,66 +2374,74 @@ export function createWorkspaceLayoutStore(
         migrate: (persistedState, version) =>
           migrateWorkspaceLayoutPersistedState(persistedState, version, ids),
         partialize: createPersistedStateProjection(),
-        merge: (persistedState, currentState) => {
-          const result = WorkspaceLayoutPersistedStateSchema.safeParse(persistedState);
-          if (!result.success) {
-            return currentState;
-          }
-          const layoutByWorkspace: Record<string, WorkspaceLayout> = {};
-          const explorerSidebarPaneIdByWorkspace: Record<string, string | null> = {
-            ...(result.data.explorerSidebarPaneIdByWorkspace ??
-              result.data.explorerPaneIdByWorkspace),
-          };
-          for (const [workspaceKey, persistedLayout] of Object.entries(
-            result.data.layoutByWorkspace,
-          )) {
-            const restoredLayout = restoreWorkspaceLayout(
-              stripEphemeralTabsFromLayout(persistedLayout),
-              resolveExplorerSidebarPaneId(
-                persistedLayout,
-                explorerSidebarPaneIdByWorkspace[workspaceKey],
-              ),
-              ids.createNodeId,
-            );
-            const explorerSidebar = ensurePersistedExplorerSidebarPane({
-              layout: restoredLayout,
-              registeredPaneId: explorerSidebarPaneIdByWorkspace[workspaceKey],
-              ids,
-            });
-            layoutByWorkspace[workspaceKey] = explorerSidebar?.layout ?? restoredLayout;
-            if (explorerSidebar) {
-              explorerSidebarPaneIdByWorkspace[workspaceKey] = explorerSidebar.paneId;
+        merge: followOtherWindowsLayout(
+          () => otherWindowsWrites,
+          (persistedState, currentState) => {
+            const result = WorkspaceLayoutPersistedStateSchema.safeParse(persistedState);
+            if (!result.success) {
+              return currentState;
             }
-          }
-          return {
-            ...currentState,
-            layoutByWorkspace,
-            pinnedAgentIdsByWorkspace: Object.fromEntries(
-              Object.entries(result.data.pinnedAgentIdsByWorkspace ?? {}).map(([key, agentIds]) => [
-                key,
-                new Set(agentIds),
-              ]),
-            ),
-            splitSizesByWorkspace: result.data.splitSizesByWorkspace ?? {},
-            explorerSidebarWidthByWorkspace:
-              result.data.explorerSidebarWidthByWorkspace ??
-              convertLegacyExplorerSidebarRatios(
-                result.data.explorerSidebarRatioByWorkspace ??
-                  result.data.sidePanelRatioByWorkspace ??
-                  {},
+            const layoutByWorkspace: Record<string, WorkspaceLayout> = {};
+            const explorerSidebarPaneIdByWorkspace: Record<string, string | null> = {
+              ...(result.data.explorerSidebarPaneIdByWorkspace ??
+                result.data.explorerPaneIdByWorkspace),
+            };
+            for (const [workspaceKey, persistedLayout] of Object.entries(
+              result.data.layoutByWorkspace,
+            )) {
+              const restoredLayout = restoreWorkspaceLayout(
+                stripEphemeralTabsFromLayout(persistedLayout),
+                resolveExplorerSidebarPaneId(
+                  persistedLayout,
+                  explorerSidebarPaneIdByWorkspace[workspaceKey],
+                ),
+                ids.createNodeId,
+              );
+              const explorerSidebar = ensurePersistedExplorerSidebarPane({
+                layout: restoredLayout,
+                registeredPaneId: explorerSidebarPaneIdByWorkspace[workspaceKey],
+                ids,
+              });
+              layoutByWorkspace[workspaceKey] = explorerSidebar?.layout ?? restoredLayout;
+              if (explorerSidebar) {
+                explorerSidebarPaneIdByWorkspace[workspaceKey] = explorerSidebar.paneId;
+              }
+            }
+            return {
+              ...currentState,
+              layoutByWorkspace,
+              pinnedAgentIdsByWorkspace: Object.fromEntries(
+                Object.entries(result.data.pinnedAgentIdsByWorkspace ?? {}).map(
+                  ([key, agentIds]) => [key, new Set(agentIds)],
+                ),
               ),
-            explorerSidebarPaneIdByWorkspace,
-            sidePaneIdByWorkspace: result.data.sidePaneIdByWorkspace ?? {},
-            pullRequestTabAutoOpenedByWorkspace:
-              result.data.pullRequestTabAutoOpenedByWorkspace ?? {},
-          };
-        },
+              splitSizesByWorkspace: result.data.splitSizesByWorkspace ?? {},
+              explorerSidebarWidthByWorkspace:
+                result.data.explorerSidebarWidthByWorkspace ??
+                convertLegacyExplorerSidebarRatios(
+                  result.data.explorerSidebarRatioByWorkspace ??
+                    result.data.sidePanelRatioByWorkspace ??
+                    {},
+                ),
+              explorerSidebarPaneIdByWorkspace,
+              sidePaneIdByWorkspace: result.data.sidePaneIdByWorkspace ?? {},
+              pullRequestTabAutoOpenedByWorkspace:
+                result.data.pullRequestTabAutoOpenedByWorkspace ?? {},
+            };
+          },
+        ),
       },
     ),
   );
+  otherWindowsWrites = followOtherWindowsWritesByKey(store, otherWindowsSource);
+  return store;
 }
 
-export const useWorkspaceLayoutStore = createWorkspaceLayoutStore();
+export const useWorkspaceLayoutStore = createWorkspaceLayoutStore(
+  undefined,
+  undefined,
+  defaultStorageEventSource(),
+);
 
 /**
  * The agent tabs that exist right now, including sheet tabs, across every workspace of this host,
@@ -2424,13 +2491,24 @@ export function observeOpenWorkspaceAgentIds(
   return unsubscribe;
 }
 
+let workspaceLayoutRestored = useWorkspaceLayoutStore.persist.hasHydrated();
+useWorkspaceLayoutStore.persist.onFinishHydration(() => {
+  workspaceLayoutRestored = true;
+});
+
+/**
+ * Whether the stored layout was read in at start-up. Unlike `persist.hasHydrated()` it stays true
+ * while another app window's write is read in, which hydrates the store again (ALM-5115).
+ */
+export function isWorkspaceLayoutRestored(): boolean {
+  return workspaceLayoutRestored;
+}
+
 export function useWorkspaceLayoutStoreHydrated(): boolean {
-  const [hasHydrated, setHasHydrated] = useState(() =>
-    useWorkspaceLayoutStore.persist.hasHydrated(),
-  );
+  const [hasHydrated, setHasHydrated] = useState(isWorkspaceLayoutRestored);
 
   useEffect(() => {
-    if (useWorkspaceLayoutStore.persist.hasHydrated()) {
+    if (isWorkspaceLayoutRestored()) {
       setHasHydrated(true);
       return;
     }

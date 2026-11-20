@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
-import { followOtherWindowsWrites, type StorageEventSource } from "./follow-other-windows";
+import {
+  followOtherWindowsWrites,
+  followOtherWindowsWritesByKey,
+  mergeFollowedEntries,
+  type OtherWindowsWrites,
+  type StorageEventSource,
+} from "./follow-other-windows";
 
 interface FoldersState {
   folderIdByProjectKey: Record<string, string>;
@@ -31,13 +37,14 @@ function createSharedStorage() {
 
 /** A window's `storage` events: the browser fires them only in the windows that did not write. */
 function createEventSource() {
-  const listeners = new Set<(event: { key: string | null; newValue: string | null }) => void>();
+  type StorageListener = Parameters<StorageEventSource["addEventListener"]>[1];
+  const listeners = new Set<StorageListener>();
   const source: StorageEventSource = {
     addEventListener: (_type, listener) => listeners.add(listener),
     removeEventListener: (_type, listener) => listeners.delete(listener),
   };
-  const fire = (key: string | null, newValue: string | null) => {
-    for (const listener of listeners) listener({ key, newValue });
+  const fire = (key: string | null, newValue: string | null, oldValue?: string | null) => {
+    for (const listener of listeners) listener({ key, newValue, oldValue });
   };
   return { source, fire, listenerCount: () => listeners.size };
 }
@@ -142,5 +149,146 @@ describe("followOtherWindowsWrites", () => {
     const shared = createSharedStorage();
     const store = createWindowStore(shared.storage);
     expect(() => followOtherWindowsWrites(store, null)()).not.toThrow();
+  });
+});
+
+interface NotesState {
+  notesById: Record<string, { text: string; at: number }>;
+  /** Never stored: what this window shows. */
+  selectedId: string | null;
+  writeNote: (id: string, text: string, at: number) => void;
+  removeNote: (id: string) => void;
+}
+
+const NOTES_KEY = "notes";
+
+function createKeyedWindowStore(storage: StateStorage, source: StorageEventSource | null) {
+  let writes: OtherWindowsWrites | null = null;
+  const store = create<NotesState>()(
+    persist(
+      (set) => ({
+        notesById: {},
+        selectedId: null,
+        writeNote: (id, text, at) =>
+          set((state) => ({ notesById: { ...state.notesById, [id]: { text, at } } })),
+        removeNote: (id) =>
+          set((state) => {
+            const { [id]: _removed, ...notesById } = state.notesById;
+            return { notesById };
+          }),
+      }),
+      {
+        name: NOTES_KEY,
+        storage: createJSONStorage(() => storage),
+        partialize: (state) => ({ notesById: state.notesById }),
+        merge: (persistedState, currentState) => {
+          const stored = persistedState as Pick<NotesState, "notesById">;
+          const before = writes?.takeStateBefore();
+          if (!before) return { ...currentState, ...stored };
+          return {
+            ...currentState,
+            notesById: mergeFollowedEntries({
+              before: before.notesById,
+              storedRaw: stored.notesById,
+              stored: stored.notesById,
+              local: currentState.notesById,
+              keepLocal: ({ local, stored: storedNote, before: beforeNote }) =>
+                local.at >
+                (storedNote?.at ?? (beforeNote as { at: number } | undefined)?.at ?? -Infinity),
+            }),
+          };
+        },
+      },
+    ),
+  );
+  writes = followOtherWindowsWritesByKey(store, source);
+  return { store, writes };
+}
+
+describe("followOtherWindowsWritesByKey", () => {
+  it("takes in the entries another window wrote or removed and keeps every other entry as it is", async () => {
+    const shared = createSharedStorage();
+    const windowA = createKeyedWindowStore(shared.storage, null).store;
+    const eventsOfB = createEventSource();
+    const windowB = createKeyedWindowStore(shared.storage, eventsOfB.source).store;
+    windowA.getState().writeNote("kept", "same in both", 1);
+    windowA.getState().writeNote("gone", "removed by A", 1);
+    await settle();
+    await windowB.persist.rehydrate();
+    windowB.setState({ selectedId: "kept" });
+    const keptInB = windowB.getState().notesById.kept;
+
+    const beforeA = shared.values.get(NOTES_KEY) ?? null;
+    windowA.getState().writeNote("new", "written by A", 2);
+    windowA.getState().removeNote("gone");
+    await settle();
+    eventsOfB.fire(NOTES_KEY, shared.values.get(NOTES_KEY) ?? null, beforeA);
+    await settle();
+
+    expect(windowB.getState().notesById).toEqual({
+      kept: { text: "same in both", at: 1 },
+      new: { text: "written by A", at: 2 },
+    });
+    expect(windowB.getState().notesById.kept).toBe(keptInB);
+    expect(windowB.getState().selectedId).toBe("kept");
+  });
+
+  it("keeps this window's later change to an entry the other window wrote too", async () => {
+    const shared = createSharedStorage();
+    const windowA = createKeyedWindowStore(shared.storage, null).store;
+    const eventsOfB = createEventSource();
+    const windowB = createKeyedWindowStore(shared.storage, eventsOfB.source).store;
+    await windowB.persist.rehydrate();
+
+    const beforeA = shared.values.get(NOTES_KEY) ?? null;
+    windowA.getState().writeNote("both", "older, from A", 1);
+    await settle();
+    const writtenByA = shared.values.get(NOTES_KEY) ?? null;
+    // B's own change, made after A's but not read in by A yet.
+    windowB.setState({ notesById: { both: { text: "later, from B", at: 2 } } });
+    shared.values.set(NOTES_KEY, writtenByA ?? "");
+    eventsOfB.fire(NOTES_KEY, writtenByA, beforeA);
+    await settle();
+
+    expect(windowB.getState().notesById.both).toEqual({ text: "later, from B", at: 2 });
+  });
+
+  it("takes in two writes that came before one merge, from the state before the first", async () => {
+    const shared = createSharedStorage();
+    const windowA = createKeyedWindowStore(shared.storage, null).store;
+    const eventsOfB = createEventSource();
+    const windowB = createKeyedWindowStore(shared.storage, eventsOfB.source).store;
+    await windowB.persist.rehydrate();
+
+    const first = shared.values.get(NOTES_KEY) ?? null;
+    windowA.getState().writeNote("one", "first write", 1);
+    await settle();
+    const second = shared.values.get(NOTES_KEY) ?? null;
+    windowA.getState().writeNote("two", "second write", 2);
+    await settle();
+    eventsOfB.fire(NOTES_KEY, second, first);
+    eventsOfB.fire(NOTES_KEY, shared.values.get(NOTES_KEY) ?? null, second);
+    await settle();
+
+    expect(Object.keys(windowB.getState().notesById).sort()).toEqual(["one", "two"]);
+  });
+
+  it("leaves a write before the first hydration to that hydration", async () => {
+    const shared = createSharedStorage();
+    const slowStorage: StateStorage = {
+      ...shared.storage,
+      getItem: async (name) => shared.storage.getItem(name),
+    };
+    const eventsOfB = createEventSource();
+    const { store: windowB, writes } = createKeyedWindowStore(slowStorage, eventsOfB.source);
+    shared.values.set(
+      NOTES_KEY,
+      JSON.stringify({ state: { notesById: { early: { text: "before B read", at: 1 } } } }),
+    );
+    eventsOfB.fire(NOTES_KEY, shared.values.get(NOTES_KEY) ?? null, null);
+    await settle();
+
+    expect(writes.takeStateBefore()).toBeUndefined();
+    expect(windowB.getState().notesById).toEqual({ early: { text: "before B read", at: 1 } });
   });
 });

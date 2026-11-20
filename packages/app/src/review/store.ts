@@ -21,6 +21,7 @@ import { generateMessageId } from "@/types/stream";
 import { buildNumberedDiffHunks, type NumberedDiffLine } from "@/utils/diff-layout";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
 
 export type { ReviewDraftComment, ReviewDraftMode, ReviewDraftSide } from "@/review/state";
 
@@ -158,6 +159,10 @@ export const useReviewDraftStore = create<ReviewDraftStore>()(
     },
   ),
 );
+
+// Review comments are written from any app window and stored whole, so each window reads the
+// others' writes back in, as the sidebar folders do (ALM-5115).
+followOtherWindowsWrites(useReviewDraftStore);
 
 function toContextLine(line: NumberedDiffLine): ReviewAttachmentContextLine | null {
   if (line.line.type === "header") {

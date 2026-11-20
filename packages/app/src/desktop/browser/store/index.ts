@@ -4,6 +4,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import {
+  followOtherWindowsWritesByKey,
+  mergeFollowedEntries,
+  type OtherWindowsWrites,
+} from "@/storage/follow-other-windows";
+import {
   applyBrowserPatch,
   BrowserIndexStateSchema,
   type BrowserIndexState,
@@ -43,6 +48,8 @@ function createBrowserId(): string {
   return BrowserAutomationBrowserIdSchema.parse(browserId);
 }
 
+let otherWindowsBrowserWrites: OtherWindowsWrites | null = null;
+
 export const useBrowserStore = create<BrowserStoreState>()(
   persist(
     (set) => ({
@@ -78,13 +85,29 @@ export const useBrowserStore = create<BrowserStoreState>()(
       name: "workspace-browser-store",
       storage: createValidatedPersistStorage(AsyncStorage, BrowserIndexStateSchema),
       partialize: (state) => sanitizeBrowsersForPersist(state),
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        ...normalizeBrowserIndexState(persistedState),
-      }),
+      // Another window's write takes in only the browsers it changed, so this window keeps the
+      // live state (loading, last error) of the ones it shows (ALM-5115).
+      merge: (persistedState, currentState) => {
+        const stored = normalizeBrowserIndexState(persistedState);
+        const before = otherWindowsBrowserWrites?.takeStateBefore();
+        if (!before) return { ...currentState, ...stored };
+        return {
+          ...currentState,
+          browsersById: mergeFollowedEntries({
+            before: before.browsersById,
+            storedRaw: (persistedState as { browsersById?: unknown } | undefined)?.browsersById,
+            stored: stored.browsersById,
+            local: currentState.browsersById,
+          }),
+        };
+      },
     },
   ),
 );
+
+// Each app window keeps its own browsers in memory and writes all of them; this takes in the ones
+// another window opened, moved or closed (ALM-5115).
+otherWindowsBrowserWrites = followOtherWindowsWritesByKey(useBrowserStore);
 
 export function getBrowserRecord(browserId: string): BrowserRecord | null {
   const normalizedBrowserId = trimNonEmpty(browserId);

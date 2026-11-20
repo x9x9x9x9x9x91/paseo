@@ -15,6 +15,7 @@ import { useWorkspaceAttachmentsStore } from "@/attachments/workspace-attachment
 import {
   applyClearDraftRecord,
   editDraftRecordText,
+  mergeFollowedDraftState,
   collectReferencedAttachmentIdsFromState,
   DRAFT_STORE_VERSION,
   isAttachmentMetadata,
@@ -36,6 +37,10 @@ import {
 } from "./migration";
 import { createDraftPersistStorage } from "./persistence";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import {
+  followOtherWindowsWritesByKey,
+  type OtherWindowsWrites,
+} from "@/storage/follow-other-windows";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { applyMetadataPatch } from "@/composer/draft/metadata";
 import { hasDraftContent } from "@/composer/draft/input-draft-core";
@@ -91,6 +96,8 @@ let gcScheduled = false;
 const draftPersistStorage = createDraftPersistStorage(
   createValidatedPersistStorage(AsyncStorage, PersistedDraftStoreSchema),
 );
+
+let otherWindowsDraftWrites: OtherWindowsWrites | null = null;
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();
@@ -490,6 +497,15 @@ export const useDraftStore = create<DraftStore>()(
       version: DRAFT_STORE_VERSION,
       storage: draftPersistStorage,
       partialize: ({ drafts, createModalDraft }) => ({ drafts, createModalDraft }),
+      merge: (persistedState, currentState) => {
+        const stored = persistedState as Partial<DraftStoreState> | undefined;
+        const before = otherWindowsDraftWrites?.takeStateBefore();
+        if (!before || !stored) return { ...currentState, ...stored };
+        return {
+          ...currentState,
+          ...mergeFollowedDraftState({ before, stored, local: currentState }),
+        };
+      },
       migrate: (state) =>
         migratePersistedState(state, {
           migrateLegacyImages,
@@ -504,3 +520,12 @@ export const useDraftStore = create<DraftStore>()(
     },
   ),
 );
+
+// Two app windows keep their own drafts in memory and write all of them; this takes in what the
+// other windows wrote, draft by draft (ALM-5115).
+otherWindowsDraftWrites = followOtherWindowsWritesByKey(useDraftStore);
+// A write still waiting for the interval was made before the merge, so it would put back the old
+// copy of what another window just wrote; written again from the merged drafts instead.
+useDraftStore.persist.onFinishHydration(() => {
+  if (draftPersistStorage?.hasPending()) useDraftStore.setState({});
+});
