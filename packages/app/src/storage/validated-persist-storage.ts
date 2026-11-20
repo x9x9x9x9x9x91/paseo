@@ -9,7 +9,8 @@ import type { PersistStorage, StateStorage, StorageValue } from "zustand/middlew
  * for the same reason. A list or record whose entries a later build may add kinds to reads them
  * with `readableEntries` / `readableRecordEntries`. A store with no migrations of its own passes
  * `migrate: keepStoredState`. A write stores the parsed value, so that build's next write leaves
- * the unknown keys out.
+ * the unknown keys out; the drafts put back what they could not read (`keepUnreadDraftEntries`,
+ * ALM-5148).
  */
 export function createValidatedPersistStorage<State>(
   backingStorage: StateStorage,
