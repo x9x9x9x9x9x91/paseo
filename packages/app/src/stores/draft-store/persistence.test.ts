@@ -53,6 +53,9 @@ function createDraftPersistence() {
     text() {
       return saved?.state.text ?? null;
     },
+    hasPending() {
+      return drafts.hasPending();
+    },
   };
 }
 
@@ -70,6 +73,17 @@ describe("draft persistence", () => {
 
     drafts.advance(1);
     expect(drafts.text()).toBe("abc");
+  });
+
+  it("tells whether a change waits for the interval", () => {
+    const drafts = createDraftPersistence();
+
+    drafts.save("stored at once");
+    expect(drafts.hasPending()).toBe(false);
+    drafts.save("waits");
+    expect(drafts.hasPending()).toBe(true);
+    drafts.advance(DRAFT_PERSIST_INTERVAL_MS);
+    expect(drafts.hasPending()).toBe(false);
   });
 
   it("does not restore a pending draft after storage is cleared", () => {
