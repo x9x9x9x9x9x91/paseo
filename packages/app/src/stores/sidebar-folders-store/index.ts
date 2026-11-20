@@ -21,6 +21,7 @@ import {
   type SidebarFoldersState,
   type SidebarFoldsUnderFilter,
   type SidebarLandingProject,
+  type SidebarListedProject,
 } from "./state";
 import {
   createSidebarFoldersStorage,
@@ -44,8 +45,15 @@ interface SidebarFoldersStore extends SidebarFoldersState {
   removeFolder: (folderId: string) => void;
   toggleFolderCollapsed: (folderId: string) => void;
   moveLooseProjectsToFolder: (folderId: string, projects: readonly SidebarLandingProject[]) => void;
-  setLandingFolder: (folderId: string | null, knownProjectKeys: readonly string[]) => void;
-  landNewProjects: (projects: readonly SidebarLandingProject[]) => void;
+  setLandingFolder: (
+    folderId: string | null,
+    knownProjectKeys: readonly string[],
+    listedServerIds: readonly string[],
+  ) => void;
+  landNewProjects: (
+    projects: readonly SidebarListedProject[],
+    listedServerIds: readonly string[],
+  ) => void;
   /** Kept in memory only, never in `partialize`: see `SidebarFoldsUnderFilter`. */
   foldsUnderFilter: SidebarFoldsUnderFilter;
   toggleFolderFoldUnderFilter: (filterKey: string, folderId: string) => void;
@@ -83,9 +91,10 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
         set((state) => toggleSidebarFolderCollapsed(state, folderId)),
       moveLooseProjectsToFolder: (folderId, projects) =>
         set((state) => moveLooseSidebarProjectsToFolder(state, folderId, projects)),
-      setLandingFolder: (folderId, knownProjectKeys) =>
-        set((state) => setSidebarLandingFolder(state, folderId, knownProjectKeys)),
-      landNewProjects: (projects) => set((state) => landNewSidebarProjects(state, projects)),
+      setLandingFolder: (folderId, knownProjectKeys, listedServerIds) =>
+        set((state) => setSidebarLandingFolder(state, folderId, knownProjectKeys, listedServerIds)),
+      landNewProjects: (projects, listedServerIds) =>
+        set((state) => landNewSidebarProjects(state, projects, listedServerIds)),
       foldsUnderFilter: NO_FOLDS_UNDER_FILTER,
       toggleFolderFoldUnderFilter: (filterKey, folderId) =>
         set((state) => ({
