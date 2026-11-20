@@ -17,11 +17,13 @@ type HoldMessage =
   | { type: "hello"; from: string }
   | { type: "here"; from: string }
   | { type: "bye"; from: string }
+  | { type: "ping"; from: string; sweepId: string }
+  | { type: "pong"; from: string; to: string; sweepId: string }
   | { type: "request"; from: string; sweepId: string }
   | { type: "reply"; from: string; to: string; sweepId: string; ids: string[] }
   | { type: "done"; from: string; sweepId: string };
 
-const MESSAGE_TYPES = new Set(["hello", "here", "bye", "request", "reply", "done"]);
+const MESSAGE_TYPES = new Set(["hello", "here", "bye", "ping", "pong", "request", "reply", "done"]);
 
 function readMessage(data: unknown): HoldMessage | null {
   if (!data || typeof data !== "object") return null;
@@ -109,6 +111,47 @@ export function createOtherWindowHolds(params: {
   let sweepCounter = 0;
 
   const post = (message: HoldMessage) => channel.send(message);
+  const pendingKey = (phase: "ping" | "request", sweepId: string) => `${phase}:${sweepId}`;
+
+  /** Counts a peer's answer to this window's ping or request, and its named ids. */
+  function takeAnswer(
+    phase: "ping" | "request",
+    message: { from: string; to: string; sweepId: string },
+    ids: readonly unknown[] = [],
+  ): void {
+    if (message.to !== windowId) return;
+    const pending = pendingSweeps.get(pendingKey(phase, message.sweepId));
+    if (!pending?.waitingOn.has(message.from)) return;
+    for (const id of ids) {
+      if (typeof id === "string") pending.heldIds.add(id);
+    }
+    pending.waitingOn.delete(message.from);
+    if (pending.waitingOn.size === 0) pending.settle();
+  }
+
+  /** Posts `ask` and waits until every peer in `waitingOn` has answered, or the reply timeout. */
+  async function collectAnswers(
+    phase: "ping" | "request",
+    sweepId: string,
+    waitingOn: Set<string>,
+    heldIds: Set<string>,
+    ask: () => void,
+  ): Promise<void> {
+    let settle: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    const timer = setTimeout(() => settle(), replyTimeoutMs);
+    pendingSweeps.set(pendingKey(phase, sweepId), {
+      waitingOn,
+      heldIds,
+      settle: () => settle(),
+    });
+    ask();
+    await answered;
+    clearTimeout(timer);
+    pendingSweeps.delete(pendingKey(phase, sweepId));
+  }
 
   function releasePeerHold(key: string): void {
     const release = heldForPeers.get(key);
@@ -168,6 +211,16 @@ export function createOtherWindowHolds(params: {
       case "bye":
         forgetPeer(message.from);
         return;
+      case "ping":
+        peers.add(message.from);
+        if (!closing) {
+          post({ type: "pong", from: windowId, to: message.from, sweepId: message.sweepId });
+        }
+        return;
+      case "pong":
+        peers.add(message.from);
+        takeAnswer("ping", message);
+        return;
       case "request":
         peers.add(message.from);
         void answerRequest(message.from, message.sweepId);
@@ -175,37 +228,33 @@ export function createOtherWindowHolds(params: {
       case "done":
         releasePeerHold(`${message.from}:${message.sweepId}`);
         return;
-      case "reply": {
+      case "reply":
         peers.add(message.from);
-        if (message.to !== windowId) return;
-        const pending = pendingSweeps.get(message.sweepId);
-        if (!pending) return;
-        for (const id of message.ids) {
-          if (typeof id === "string") pending.heldIds.add(id);
-        }
-        if (pending.waitingOn.delete(message.from) && pending.waitingOn.size === 0) {
-          pending.settle();
-        }
+        takeAnswer("request", message, message.ids);
         return;
-      }
     }
   });
+
+  /** Says hello, resolving once the open windows have had time to answer it. */
+  function announce(): Promise<void> {
+    post({ type: "hello", from: windowId });
+    return new Promise<void>((resolve) => {
+      setTimeout(resolve, discoveryMs);
+    });
+  }
+  let discovered = announce();
 
   params.closeSource?.onPageHide(() => {
     closing = true;
     post({ type: "bye", from: windowId });
     for (const key of Array.from(heldForPeers.keys())) releasePeerHold(key);
   });
-  // A page the browser kept and shows again said bye on leaving, so it says hello once more.
+  // A page the browser kept and shows again said bye on leaving, so it says hello once more,
+  // and learns anew the windows opened while it was away before it sweeps.
   params.closeSource?.onPageShow((restored) => {
     if (!restored) return;
     closing = false;
-    post({ type: "hello", from: windowId });
-  });
-
-  post({ type: "hello", from: windowId });
-  const discovered = new Promise<void>((resolve) => {
-    setTimeout(resolve, discoveryMs);
+    discovered = announce();
   });
 
   return {
@@ -229,27 +278,30 @@ export function createOtherWindowHolds(params: {
         return { heldIds: new Set(), isHeld: () => true, finish };
       }
 
-      const waitingOn = new Set(peers);
-      const heldIds = new Set<string>();
-      let settle: () => void = () => {};
-      const answered = new Promise<void>((resolve) => {
-        settle = resolve;
-      });
-      const timer = setTimeout(() => settle(), replyTimeoutMs);
-      pendingSweeps.set(sweepId, { waitingOn, heldIds, settle: () => settle() });
-      const requestedAt = Date.now();
-      post({ type: "request", from: windowId, sweepId });
-      await answered;
-      clearTimeout(timer);
-      pendingSweeps.delete(sweepId);
-
-      if (waitingOn.size > 0) {
-        for (const peerId of waitingOn) {
+      const missAll = (missing: Set<string>) => {
+        for (const peerId of missing) {
           missedRequests.set(peerId, (missedRequests.get(peerId) ?? 0) + 1);
         }
         finish();
         return null;
-      }
+      };
+
+      // First a ping no one holds anything for, so the windows that answer do not hold their
+      // saves while this one waits out a window that is gone.
+      const unanswered = new Set(peers);
+      await collectAnswers("ping", sweepId, unanswered, new Set(), () =>
+        post({ type: "ping", from: windowId, sweepId }),
+      );
+      if (unanswered.size > 0) return missAll(unanswered);
+
+      const waitingOn = new Set(peers);
+      const heldIds = new Set<string>();
+      const requestedAt = Date.now();
+      await collectAnswers("request", sweepId, waitingOn, heldIds, () =>
+        post({ type: "request", from: windowId, sweepId }),
+      );
+
+      if (waitingOn.size > 0) return missAll(waitingOn);
       const isHeld = () => Date.now() - requestedAt < holdTimeoutMs / 2;
       return { heldIds, isHeld, finish };
     },
