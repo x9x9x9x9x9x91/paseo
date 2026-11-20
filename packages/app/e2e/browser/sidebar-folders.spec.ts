@@ -210,7 +210,8 @@ test.describe("Sidebar folders", () => {
       page.getByTestId(`sidebar-workspace-row-${serverId}:${workspaceId}`);
     const projectRow = (projectKey: string) =>
       page.getByTestId(`sidebar-project-row-${projectKey}`);
-    const folderMembers = page.locator('[data-testid^="sidebar-folder-projects-"]');
+    // The folder's block is a group named after it, its header and its projects.
+    const folderMembers = page.getByRole("group", { name: "Workers" });
     const landingRow = page.locator('[data-testid^="sidebar-folder-menu-landing-"]');
     const sidebar = page.getByTestId("sidebar-project-workspace-list-scroll").first();
     const openFolderMenu = async () => {
