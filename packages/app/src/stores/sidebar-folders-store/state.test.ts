@@ -177,11 +177,13 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
     expect(moveSidebarProjectToFolder(ticked, "alma", null)).toEqual(EMPTY_SIDEBAR_FOLDERS);
   });
 
-  it("stores the landing keys only while a folder is ticked, so an older build reads the rest", () => {
+  it("stores the folders and the tick, unticked as none", () => {
     const loose = withWorkers();
     expect(persistedSidebarFolders(loose)).toEqual({
       folders: loose.folders,
       folderIdByProjectKey: loose.folderIdByProjectKey,
+      landingFolderId: null,
+      knownProjectKeys: [],
     });
     const ticked = setSidebarLandingFolder(loose, "workers", ["chats"]);
     expect(persistedSidebarFolders(ticked)).toEqual({
