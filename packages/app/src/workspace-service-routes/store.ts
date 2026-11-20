@@ -2,7 +2,11 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { persist, type StateStorage } from "zustand/middleware";
 import { z } from "zod";
-import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import {
+  createValidatedPersistStorage,
+  keepStoredState,
+  readableRecordEntries,
+} from "@/storage/validated-persist-storage";
 import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
 import type { WorkspaceScriptLinkKind } from "@/utils/workspace-script-links";
 
@@ -13,7 +17,7 @@ interface WorkspaceServiceRoutePreferencesState {
 
 const WorkspaceScriptLinkKindSchema = z.enum(["public", "paseo", "direct"]);
 const WorkspaceServiceRoutePreferencesSchema = z.object({
-  byServerId: z.record(z.string(), WorkspaceScriptLinkKindSchema),
+  byServerId: readableRecordEntries(WorkspaceScriptLinkKindSchema),
 });
 
 export function createWorkspaceServiceRoutePreferencesStore(storage: StateStorage) {
@@ -33,6 +37,7 @@ export function createWorkspaceServiceRoutePreferencesStore(storage: StateStorag
         name: "workspace-service-route-preferences",
         version: 1,
         storage: createValidatedPersistStorage(storage, WorkspaceServiceRoutePreferencesSchema),
+        migrate: keepStoredState,
         partialize: (state) => ({ byServerId: state.byServerId }),
         merge: (persistedState, currentState) => {
           const result = WorkspaceServiceRoutePreferencesSchema.safeParse(persistedState);

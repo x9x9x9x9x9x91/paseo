@@ -1,7 +1,9 @@
 import { z } from "zod";
 
+// Loose: a key a later build adds to a tab's state reads back without it, where a failed parse
+// would show the defaults and the next change write them over the stored state (ALM-5138).
 export const changesStateSchema = z
-  .strictObject({
+  .object({
     // COMPAT(changesPaneState): fields persisted by v0.5.0-beta.3; remove after 2026-11-21. Preferences are global and mode selection is ephemeral.
     mode: z.enum(["uncommitted", "base"]).optional(),
     baseRef: z.string().optional(),

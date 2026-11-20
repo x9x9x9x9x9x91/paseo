@@ -4,6 +4,7 @@ import { usePanelStore } from ".";
 import {
   DEFAULT_TREE_RAIL_WIDTH,
   migratePanelState,
+  PanelPersistedStateSchema,
   selectIsAgentListOpen,
   selectIsCompactFileExplorerOpen,
   setMobilePanelTarget,
@@ -245,4 +246,19 @@ describe("panel-store wide navigation overlay", () => {
       expect(usePanelStore.getState().mobilePanel.revision).toBeGreaterThan(openedRevision);
     },
   );
+});
+
+// A value a later build adds reads as the default, never as unset over it (ALM-5138).
+it("reads a later build's sort or mobile panel as the default and keeps the rest", () => {
+  expect(
+    PanelPersistedStateSchema.parse({
+      explorerSortOption: "type",
+      mobilePanel: { target: "terminal", revision: 3 },
+      sidebarWidth: 300,
+    }),
+  ).toEqual({
+    explorerSortOption: "name",
+    mobilePanel: { target: "agent", revision: 0 },
+    sidebarWidth: 300,
+  });
 });

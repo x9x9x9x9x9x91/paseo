@@ -316,7 +316,8 @@ const StoredAppSettingsSchema = z
         ...DEFAULT_OPEN_IN_SIDE_PANE_PREFERENCES,
         legacyPullRequestsInSidePane: undefined,
       }),
-    pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional(),
+    // Without a catch, a location a later build adds would fail the whole read into the defaults.
+    pullRequestOpenLocation: z.enum(["main", "side", "explorer"]).optional().catch(undefined),
     notifications: z
       .unknown()
       .transform((value) => normalizeNotificationPreferences(value))

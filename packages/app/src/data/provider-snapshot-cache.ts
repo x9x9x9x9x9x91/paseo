@@ -45,7 +45,8 @@ interface ProviderSnapshotIndexEntry {
   writtenAt: string;
 }
 
-const StoredProviderSnapshotSchema: z.ZodType<StoredProviderSnapshot> = z.strictObject({
+// Loose: a key a later build adds would make this build drop every cached snapshot (ALM-5138).
+const StoredProviderSnapshotSchema: z.ZodType<StoredProviderSnapshot> = z.object({
   version: z.literal(CACHE_VERSION),
   hash: z.string(),
   generatedAt: z.string().datetime({ offset: true }),
