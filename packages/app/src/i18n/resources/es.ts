@@ -1358,6 +1358,8 @@ export const es: TranslationResources = {
       menu: "Acciones de la carpeta",
       moveTo: "Mover a una carpeta",
       takeOut: "Sacar de la carpeta",
+      moveLooseHere: "Mover aquí todos los demás proyectos",
+      landHere: "Los proyectos nuevos van aquí",
       create: "Nueva carpeta…",
       createConfirm: "Crear carpeta",
       name: "Nombre de la carpeta",

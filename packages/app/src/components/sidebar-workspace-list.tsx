@@ -44,6 +44,7 @@ import {
   Folder,
   FolderInput,
   FolderOpen,
+  Inbox,
   Pencil,
   Settings,
   MoreVertical,
@@ -94,6 +95,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -116,6 +118,10 @@ import {
   type SidebarProjectListItem,
 } from "@/components/sidebar/sidebar-folders";
 import { useSidebarFoldersStore, type SidebarFolder } from "@/stores/sidebar-folders-store";
+import {
+  moveProjectsIntoFolderWithOrder,
+  useSidebarModel,
+} from "@/components/sidebar/sidebar-model";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
 import { useToast } from "@/contexts/toast-context";
 import { SidebarToastClearance } from "@/components/sidebar/sidebar-toast-region";
@@ -204,6 +210,7 @@ const ThemedSettings = withUnistyles(Settings);
 const ThemedFolder = withUnistyles(Folder);
 const ThemedFolderOpen = withUnistyles(FolderOpen);
 const ThemedFolderInput = withUnistyles(FolderInput);
+const ThemedInbox = withUnistyles(Inbox);
 const ThemedPencil = withUnistyles(Pencil);
 
 const foregroundColorMapping = (theme: Theme) => ({
@@ -502,6 +509,7 @@ const moveToFolderLeadingIcon = (
   <ThemedFolderInput size={14} uniProps={foregroundMutedColorMapping} />
 );
 const renameFolderLeadingIcon = <ThemedPencil size={14} uniProps={foregroundMutedColorMapping} />;
+const landingFolderLeadingIcon = <ThemedInbox size={14} uniProps={foregroundMutedColorMapping} />;
 const settingsLeadingIcon = <ThemedSettings size={14} uniProps={foregroundMutedColorMapping} />;
 const openInNewWindowLeadingIcon = (
   <ThemedExternalLink size={14} uniProps={foregroundMutedColorMapping} />
@@ -1111,18 +1119,45 @@ function ProjectHeaderRow({
 const folderClosedLeadingIcon = <ThemedFolder size={16} uniProps={foregroundMutedColorMapping} />;
 const folderOpenLeadingIcon = <ThemedFolderOpen size={16} uniProps={foregroundMutedColorMapping} />;
 
+/** What a folder's menu does besides renaming and removing it (ALM-5108). */
+interface FolderMenuActions {
+  /** This folder is the one new projects land in. */
+  landing: boolean;
+  onMoveLooseProjects: () => void;
+  onToggleLanding: () => void;
+  onRemove: () => void;
+}
+
 function FolderMenuItems({
   surface,
   folder,
-  onRemove,
+  actions,
 }: {
   surface: ProjectMenuSurface;
   folder: SidebarFolder;
-  onRemove: () => void;
+  actions: FolderMenuActions;
 }) {
   const { t } = useTranslation();
   return (
     <>
+      <ProjectMenuItem
+        surface={surface}
+        testID={`sidebar-folder-menu-move-loose-${folder.id}`}
+        leading={moveToFolderLeadingIcon}
+        onSelect={actions.onMoveLooseProjects}
+      >
+        {t("sidebar.folder.moveLooseHere")}
+      </ProjectMenuItem>
+      <ProjectMenuItem
+        surface={surface}
+        testID={`sidebar-folder-menu-landing-${folder.id}`}
+        leading={landingFolderLeadingIcon}
+        selected={actions.landing}
+        onSelect={actions.onToggleLanding}
+      >
+        {t("sidebar.folder.landHere")}
+      </ProjectMenuItem>
+      <DropdownMenuSeparator />
       <DropdownMenuSubTrigger
         id={FOLDER_RENAME_PAGE_ID}
         leading={renameFolderLeadingIcon}
@@ -1134,7 +1169,7 @@ function FolderMenuItems({
         surface={surface}
         testID={`sidebar-folder-menu-remove-${folder.id}`}
         leading={trash2LeadingIcon}
-        onSelect={onRemove}
+        onSelect={actions.onRemove}
       >
         {t("sidebar.folder.remove")}
       </ProjectMenuItem>
@@ -1145,11 +1180,11 @@ function FolderMenuItems({
 function FolderKebabMenu({
   folder,
   pages,
-  onRemove,
+  actions,
 }: {
   folder: SidebarFolder;
   pages: ComponentProps<typeof DropdownMenuContent>["pages"];
-  onRemove: () => void;
+  actions: FolderMenuActions;
 }) {
   const { t } = useTranslation();
   return (
@@ -1169,7 +1204,7 @@ function FolderKebabMenu({
         pages={pages}
         sheetTitle={t("sidebar.folder.menu")}
       >
-        <FolderMenuItems surface="dropdown" folder={folder} onRemove={onRemove} />
+        <FolderMenuItems surface="dropdown" folder={folder} actions={actions} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1178,21 +1213,28 @@ function FolderKebabMenu({
 /**
  * A folder's row: its icon, its name, and its fold. A folded folder shows no status of the
  * projects inside it, since it holds the ones you do not visit (Tim's pick on ALM-5044).
- * Right-click or the kebab renames or removes it; it drags like a project row.
+ * Right-click or the kebab renames or removes it, fills it with every loose repo, or makes it the
+ * one new projects land in (ALM-5108); it drags like a project row.
  */
 function FolderHeaderRow({
   folder,
+  landing,
   onToggleCollapsed,
   onRename,
   onRemove,
+  onMoveLooseProjects,
+  onToggleLanding,
   drag,
   isDragging,
   dragHandleProps,
 }: {
   folder: SidebarFolder;
+  landing: boolean;
   onToggleCollapsed: (folderId: string) => void;
   onRename: (folderId: string, name: string) => void;
   onRemove: (folderId: string) => void;
+  onMoveLooseProjects: (folderId: string) => void;
+  onToggleLanding: (folderId: string) => void;
   drag: () => void;
   isDragging: boolean;
   dragHandleProps?: DraggableListDragHandleProps;
@@ -1211,7 +1253,15 @@ function FolderHeaderRow({
     (name: string) => onRename(folder.id, name),
     [folder.id, onRename],
   );
-  const handleRemove = useCallback(() => onRemove(folder.id), [folder.id, onRemove]);
+  const menuActions = useMemo<FolderMenuActions>(
+    () => ({
+      landing,
+      onMoveLooseProjects: () => onMoveLooseProjects(folder.id),
+      onToggleLanding: () => onToggleLanding(folder.id),
+      onRemove: () => onRemove(folder.id),
+    }),
+    [folder.id, landing, onMoveLooseProjects, onRemove, onToggleLanding],
+  );
   const pages = useFolderMenuPages(folder, handleRename);
 
   const handlePress = useCallback(() => {
@@ -1277,7 +1327,7 @@ function FolderHeaderRow({
               style={!actionsVisible && styles.projectKebabButtonHidden}
               pointerEvents={actionsVisible ? "auto" : "none"}
             >
-              <FolderKebabMenu folder={folder} pages={pages} onRemove={handleRemove} />
+              <FolderKebabMenu folder={folder} pages={pages} actions={menuActions} />
             </View>
           </View>
         </ContextMenuTrigger>
@@ -1288,7 +1338,7 @@ function FolderHeaderRow({
         pages={pages}
         testID={`sidebar-folder-context-menu-${folder.id}`}
       >
-        <FolderMenuItems surface="context" folder={folder} onRemove={handleRemove} />
+        <FolderMenuItems surface="context" folder={folder} actions={menuActions} />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -2368,12 +2418,15 @@ function SidebarGroupedModeList({
  */
 function FolderBlock({
   folder,
+  landing,
   projects,
   renderProject,
   onProjectsReorder,
   onToggleCollapsed,
   onRename,
   onRemove,
+  onMoveLooseProjects,
+  onToggleLanding,
   drag,
   isDragging,
   dragHandleProps,
@@ -2382,12 +2435,15 @@ function FolderBlock({
   dragGestureHostActive,
 }: {
   folder: SidebarFolder;
+  landing: boolean;
   projects: SidebarProjectEntry[];
   renderProject: (info: DraggableRenderItemInfo<SidebarProjectEntry>) => ReactElement;
   onProjectsReorder: (folderId: string, projects: SidebarProjectEntry[]) => void;
   onToggleCollapsed: (folderId: string) => void;
   onRename: (folderId: string, name: string) => void;
   onRemove: (folderId: string) => void;
+  onMoveLooseProjects: (folderId: string) => void;
+  onToggleLanding: (folderId: string) => void;
   drag: () => void;
   isDragging: boolean;
   dragHandleProps?: DraggableListDragHandleProps;
@@ -2408,9 +2464,12 @@ function FolderBlock({
     >
       <FolderHeaderRow
         folder={folder}
+        landing={landing}
         onToggleCollapsed={onToggleCollapsed}
         onRename={onRename}
         onRemove={onRemove}
+        onMoveLooseProjects={onMoveLooseProjects}
+        onToggleLanding={onToggleLanding}
         drag={drag}
         isDragging={isDragging}
         dragHandleProps={dragHandleProps}
@@ -2692,6 +2751,37 @@ function ProjectModeList({
     [applyVisibleProjectOrder, removeFolder],
   );
 
+  // Both read every project the hosts shown hold, those a project filter hides too, since a
+  // folder is filled and landed for the whole list, not the filtered one (ALM-5108).
+  const { allProjects } = useSidebarModel();
+  const allProjectsRef = useRef(allProjects);
+  allProjectsRef.current = allProjects;
+  const landingFolderId = useSidebarFoldersStore((state) => state.landingFolderId);
+  const moveLooseProjectsToFolder = useSidebarFoldersStore(
+    (state) => state.moveLooseProjectsToFolder,
+  );
+  const setLandingFolder = useSidebarFoldersStore((state) => state.setLandingFolder);
+  const handleMoveLooseProjects = useCallback(
+    (folderId: string) =>
+      moveProjectsIntoFolderWithOrder(folderId, () =>
+        moveLooseProjectsToFolder(folderId, allProjectsRef.current),
+      ),
+    [moveLooseProjectsToFolder],
+  );
+  const handleToggleLanding = useCallback(
+    (folderId: string) => {
+      if (useSidebarFoldersStore.getState().landingFolderId === folderId) {
+        setLandingFolder(null, []);
+        return;
+      }
+      setLandingFolder(
+        folderId,
+        allProjectsRef.current.map((project) => project.viewKey),
+      );
+    },
+    [setLandingFolder],
+  );
+
   // A project taken out of the middle of a folder, loose or into a new folder, would split that
   // folder in the order, and a filtered list could then show it elsewhere (ALM-5054).
   const regroupProjectOrder = useCallback(() => {
@@ -2878,12 +2968,15 @@ function ProjectModeList({
         <FolderBlock
           key={item.key}
           folder={item.folder}
+          landing={item.folder.id === landingFolderId}
           projects={item.projects}
           renderProject={renderProject}
           onProjectsReorder={handleFolderProjectsReorder}
           onToggleCollapsed={toggleFolderCollapsed}
           onRename={renameFolder}
           onRemove={handleRemoveFolder}
+          onMoveLooseProjects={handleMoveLooseProjects}
+          onToggleLanding={handleToggleLanding}
           drag={drag}
           isDragging={isActive}
           dragHandleProps={dragHandleProps}
@@ -2897,7 +2990,10 @@ function ProjectModeList({
       activeWorkspaceSelection,
       dragGestureHostActive,
       handleFolderProjectsReorder,
+      handleMoveLooseProjects,
       handleRemoveFolder,
+      handleToggleLanding,
+      landingFolderId,
       parentGestureRef,
       renameFolder,
       renderProject,
