@@ -15,7 +15,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/contexts/toast-api-context";
 import { useDaemonConfig } from "@/hooks/use-daemon-config";
-import { useHostFeature } from "@/runtime/host-features";
+import { useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { SpeechProviderSheet } from "./speech-provider-sheet";
 import { useLocalSpeechModels } from "./use-local-speech-models";
@@ -44,7 +44,8 @@ export function HostVoicePage({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
   const toast = useToast();
   const isConnected = useHostRuntimeIsConnected(serverId);
-  const supported = useHostFeature(serverId, "speechSettings");
+  // `null` until the host's server info arrives: that wait is a load, not a host to update (ALM-5046).
+  const supported = useHostFeatureAvailability(serverId, "speechSettings");
   const { config, patchConfig } = useDaemonConfig(serverId);
   const localModels = useLocalSpeechModels(serverId);
   const { refresh: refreshModels } = localModels;
@@ -89,11 +90,11 @@ export function HostVoicePage({ serverId }: { serverId: string }) {
   if (!isConnected) {
     return <Alert size="md" variant="warning" title={t("settings.voice.offline")} />;
   }
-  if (!supported) {
+  if (supported === false) {
     return <Alert size="md" variant="warning" title={t("settings.voice.updateHost")} />;
   }
   const features = config?.features;
-  if (!features) {
+  if (supported === null || !features) {
     return (
       <View style={styles.loading}>
         <LoadingSpinner size="large" color={styles.spinnerColor.color} />

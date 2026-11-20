@@ -23,7 +23,7 @@ import { useTimeAgo } from "@/hooks/use-time-ago";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useProvidersSnapshot } from "@/hooks/use-providers-snapshot";
 import { useHostProjects } from "@/projects/host-projects";
-import { useHostFeature } from "@/runtime/host-features";
+import { useHostFeature, useHostFeatureAvailability } from "@/runtime/host-features";
 import { useHosts } from "@/runtime/host-runtime";
 import { i18n } from "@/i18n/i18next";
 import {
@@ -513,15 +513,24 @@ export function ImportSessionSheet({
     enabled: visible,
   });
   const supportsWorkspaceTarget = useHostFeature(serverId, "importSessionWorkspaceTarget");
-  const requiresHostUpgrade = requiresImportSessionsHostUpgrade({
-    supportsSnapshot,
-    workspaceId,
-    supportsWorkspaceTarget,
-  });
+  // A host that has sent no server info has not connected: the sheet asks to connect it, and
+  // only a connected host lacking a feature is told to update (ALM-5046).
+  const isHostKnown = useHostFeatureAvailability(serverId, "providersSnapshot") !== null;
+  const isClientReady = Boolean(client) && isHostKnown;
+  const requiresHostUpgrade =
+    isHostKnown &&
+    requiresImportSessionsHostUpgrade({
+      supportsSnapshot,
+      workspaceId,
+      supportsWorkspaceTarget,
+    });
 
   const providersToFetch = useMemo(
-    () => (requiresHostUpgrade ? null : resolveProvidersToFetch(supportsSnapshot, snapshotEntries)),
-    [requiresHostUpgrade, supportsSnapshot, snapshotEntries],
+    () =>
+      !isHostKnown || requiresHostUpgrade
+        ? null
+        : resolveProvidersToFetch(supportsSnapshot, snapshotEntries),
+    [isHostKnown, requiresHostUpgrade, supportsSnapshot, snapshotEntries],
   );
 
   const providerLabelById = useMemo(
@@ -804,7 +813,7 @@ export function ImportSessionSheet({
   const showLoadMore = hasMoreSessions(queries, pageLimit);
   const showListHeader = hasListHeader({
     showFilter,
-    isClientReady: Boolean(client),
+    isClientReady,
     isSnapshotUnsupported,
     hasNoImportableProviders,
     isLoadingSessions,
@@ -851,7 +860,7 @@ export function ImportSessionSheet({
             </View>
           ) : null}
           <SheetStatusMessages
-            isClientReady={Boolean(client)}
+            isClientReady={isClientReady}
             isSnapshotUnsupported={isSnapshotUnsupported}
             hasNoImportableProviders={hasNoImportableProviders}
             isLoadingSessions={isLoadingSessions}
@@ -876,7 +885,7 @@ export function ImportSessionSheet({
       handleFilterSelect,
       renderFilterOption,
       isFilterOpen,
-      client,
+      isClientReady,
       isSnapshotUnsupported,
       hasNoImportableProviders,
       isLoadingSessions,
