@@ -1349,6 +1349,17 @@ export const fr: TranslationResources = {
         "Ajoutez des commandes de configuration pour que les nouveaux worktrees installent leurs dépendances et se préparent automatiquement.",
       openProjectSettings: "Ouvrir les paramètres du projet",
     },
+    folder: {
+      menu: "Actions du dossier",
+      moveTo: "Déplacer vers un dossier",
+      takeOut: "Sortir du dossier",
+      create: "Nouveau dossier…",
+      createConfirm: "Créer le dossier",
+      name: "Nom du dossier",
+      rename: "Renommer le dossier",
+      renameConfirm: "Renommer",
+      remove: "Supprimer le dossier",
+    },
     project: {
       actions: {
         menu: "Actions du projet",

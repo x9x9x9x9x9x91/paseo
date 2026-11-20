@@ -1330,6 +1330,17 @@ export const en = {
         "Add setup commands so new worktrees can install dependencies and prepare themselves automatically.",
       openProjectSettings: "Open project settings",
     },
+    folder: {
+      menu: "Folder actions",
+      moveTo: "Move to folder",
+      takeOut: "Take out of folder",
+      create: "New folder…",
+      createConfirm: "Create folder",
+      name: "Folder name",
+      rename: "Rename folder",
+      renameConfirm: "Rename",
+      remove: "Remove folder",
+    },
     project: {
       actions: {
         menu: "Project actions",
