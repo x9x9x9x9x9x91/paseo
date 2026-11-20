@@ -326,3 +326,38 @@ it("drops a tab of a kind it does not know and keeps the rest of the layout", as
   expect(tabs.map((tab) => tab.target)).toContainEqual({ kind: "agent", agentId: "agent-1" });
   expect(tabs.map((tab) => tab.tabId)).not.toContain("later-tab");
 });
+
+// One workspace's layout a later build changed would empty every workspace's (ALM-5138).
+it("starts only the workspace whose layout it cannot read empty", async () => {
+  const values = new Map<string, string>();
+  const storage: StateStorage = {
+    getItem: (name) => values.get(name) ?? null,
+    setItem: (name, value) => {
+      values.set(name, value);
+    },
+    removeItem: (name) => {
+      values.delete(name);
+    },
+  };
+  const workspaceKey = "server:workspace";
+  const source = createWorkspaceLayoutStore(undefined, storage);
+  await source.persist.rehydrate();
+  source.getState().openTab({
+    workspaceKey,
+    target: { kind: "agent", agentId: "agent-1" },
+    intent: "reveal",
+  });
+  const persisted = JSON.parse(values.get("workspace-layout-state")!);
+  persisted.state.layoutByWorkspace["server:later"] = {
+    root: { kind: "stack", stack: { id: "s" } },
+    focusedPaneId: null,
+  };
+  values.set("workspace-layout-state", JSON.stringify(persisted));
+
+  const restored = createWorkspaceLayoutStore(undefined, storage);
+  await restored.persist.rehydrate();
+
+  const tabs = collectAllTabs(restored.getState().layoutByWorkspace[workspaceKey].root);
+  expect(tabs.map((tab) => tab.target)).toContainEqual({ kind: "agent", agentId: "agent-1" });
+  expect(restored.getState().layoutByWorkspace["server:later"]).toBeUndefined();
+});

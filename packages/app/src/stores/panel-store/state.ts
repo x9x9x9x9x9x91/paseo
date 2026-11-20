@@ -117,7 +117,8 @@ const DesktopSidebarStorageSchema = z.object({
   fileExplorerOpen: z.boolean().optional(),
 });
 
-// A value a later build adds to a choice reads as unset, so it fails only itself (ALM-5138).
+// A value a later build adds to a choice reads as its default, so it fails only itself; never as
+// unset where the state needs the key, which the merge would spread over the default (ALM-5138).
 export const PanelPersistedStateSchema = z.object({
   mobileView: z.enum(["agent", "agent-list", "file-explorer"]).optional().catch(undefined),
   mobilePanel: z
@@ -126,7 +127,7 @@ export const PanelPersistedStateSchema = z.object({
       revision: z.number().int().nonnegative(),
     })
     .optional()
-    .catch(undefined),
+    .catch({ target: "agent", revision: 0 }),
   desktop: DesktopSidebarStorageSchema.optional(),
   explorerTab: ExplorerTabSchema.optional(),
   explorerTabByCheckout: z.record(z.string(), ExplorerTabSchema).optional(),
@@ -138,7 +139,7 @@ export const PanelPersistedStateSchema = z.object({
   sidebarWidth: z.number().optional(),
   // Accepted only so migration can discard the former docked explorer sidebar width.
   explorerWidth: z.number().optional(),
-  explorerSortOption: z.enum(["name", "modified", "size"]).optional().catch(undefined),
+  explorerSortOption: z.enum(["name", "modified", "size"]).optional().catch("name"),
   explorerShowHiddenFiles: z.boolean().optional(),
   explorerFilesSplitRatio: z.number().optional(),
   treeRailWidth: z.number().optional(),

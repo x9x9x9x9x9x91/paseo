@@ -14,4 +14,13 @@ describe("Changes pane state", () => {
       }),
     ).toEqual(defaultChangesState);
   });
+
+  // A key a later build adds would show the defaults, lost at the next change (ALM-5138).
+  it("reads a key a later build added without it", () => {
+    const state = { ...defaultChangesState, collapsedFilePaths: ["a.ts"], sortBy: "size" };
+    expect(changesStateSchema.parse(state)).toEqual({
+      ...defaultChangesState,
+      collapsedFilePaths: ["a.ts"],
+    });
+  });
 });

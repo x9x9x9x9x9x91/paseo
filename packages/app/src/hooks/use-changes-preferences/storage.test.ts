@@ -50,6 +50,16 @@ describe("loadChangesPreferencesFromStorage", () => {
     expect(storage.entries.get(CHANGES_PREFERENCES_STORAGE_KEY)).toBe(persisted);
   });
 
+  it("reads a value it cannot read as the defaults and leaves it stored", async () => {
+    const persisted = JSON.stringify({ wrapLines: "soft" });
+    const storage = createInMemoryKeyValueStorage({
+      [CHANGES_PREFERENCES_STORAGE_KEY]: persisted,
+    });
+
+    expect(await loadChangesPreferencesFromStorage(storage)).toEqual(DEFAULT_CHANGES_PREFERENCES);
+    expect(storage.entries.get(CHANGES_PREFERENCES_STORAGE_KEY)).toBe(persisted);
+  });
+
   it("loads persisted layout and whitespace preferences without rewriting storage", async () => {
     const persisted = JSON.stringify({
       layout: "split",

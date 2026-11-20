@@ -70,6 +70,10 @@ export async function loadChangesPreferencesFromStorage(
     };
   }
 
+  // A value this build cannot read may be a later build's: read the defaults and leave it stored.
+  if ((await storage.getItem(CHANGES_PREFERENCES_STORAGE_KEY)) !== null) {
+    return DEFAULT_CHANGES_PREFERENCES;
+  }
   const legacyWrapLines = await loadLegacyWrapLinesPreference(storage);
   const next = {
     ...DEFAULT_CHANGES_PREFERENCES,

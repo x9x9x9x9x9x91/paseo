@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readableRecordEntries } from "@/storage/validated-persist-storage";
 import type { SplitNode, WorkspaceLayout } from "./workspace-layout-actions";
 
 // COMPAT(providerOptionControls): added in v0.15.0, remove after 2027-05-01. Layouts saved before
@@ -130,7 +131,8 @@ const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.object({
 });
 export const WorkspaceLayoutPersistedStateSchema = z.object({
   pinnedAgentIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
-  layoutByWorkspace: z.record(z.string(), WorkspaceLayoutStorageSchema),
+  // One workspace's layout this build cannot read starts empty alone (ALM-5138).
+  layoutByWorkspace: readableRecordEntries(WorkspaceLayoutStorageSchema),
   splitSizesByWorkspace: z.record(z.string(), z.record(z.string(), z.array(z.number()))).optional(),
   explorerSidebarWidthByWorkspace: z.record(z.string(), z.number()).optional(),
   // COMPAT(explorerSidebarWidth): added in v0.6, remove after 2027-08-25.

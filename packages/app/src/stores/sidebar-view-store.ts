@@ -90,11 +90,12 @@ const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "label"]);
 const SidebarLabelFilterSchema = z.object({
   labels: z.array(z.string()),
 });
-// A value a later build adds to a choice reads as unset, so it fails only itself (ALM-5138).
+// A value a later build adds to a choice reads as its default, so it fails only itself; never as
+// unset, which a merge would spread over the default (ALM-5138).
 const SidebarViewPersistedStateSchema = z.object({
-  workspaceSort: z.enum(["manual", "created", "lastPrompt"]).optional().catch(undefined),
+  workspaceSort: z.enum(["manual", "created", "lastPrompt"]).optional().catch("created"),
   showBackground: z.boolean().optional(),
-  groupMode: PersistedSidebarGroupModeSchema.optional().catch(undefined),
+  groupMode: PersistedSidebarGroupModeSchema.optional().catch("project"),
   hostFilters: z.array(z.string()).optional(),
   hostFilter: z.string().nullable().optional(),
   projectFilters: z.array(z.string()).optional(),

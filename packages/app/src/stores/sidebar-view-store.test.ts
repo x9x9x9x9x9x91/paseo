@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { StateStorage } from "zustand/middleware";
 import {
@@ -303,4 +304,24 @@ it("defaults to Created and persists the Last prompt choice across migration", (
 
 it("retains the manual sorting preference on reload", () => {
   expect(migrateSidebarViewState({ workspaceSort: "manual" }).workspaceSort).toBe("manual");
+});
+
+// A sort or grouping a later build adds reads as the default, never as unset (ALM-5138).
+it("reads a later build's sort and grouping as the defaults and keeps the rest", async () => {
+  await AsyncStorage.setItem(
+    "sidebar-view",
+    JSON.stringify({
+      state: { workspaceSort: "activity", groupMode: "folder", showBackground: true },
+      version: 8,
+    }),
+  );
+
+  await useSidebarViewStore.persist.rehydrate();
+
+  expect(useSidebarViewStore.getState()).toMatchObject({
+    workspaceSort: "created",
+    groupMode: "project",
+    showBackground: true,
+  });
+  await AsyncStorage.removeItem("sidebar-view");
 });
