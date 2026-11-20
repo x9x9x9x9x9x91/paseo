@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AttachmentMetadata, AttachmentStore, SaveAttachmentInput } from "@/attachments/types";
 import { __setAttachmentStoreForTests } from "./store";
 import {
+  __resetRecentlyPersistedForTests,
   encodeAttachmentsForSend,
   garbageCollectAttachments,
   persistAttachmentFromBytes,
@@ -56,6 +57,7 @@ function createRecordingStore(): AttachmentStore & {
 describe("attachment service", () => {
   afterEach(() => {
     __setAttachmentStoreForTests(null);
+    __resetRecentlyPersistedForTests();
   });
 
   it("persists raw bytes without requiring a base64 wrapper", async () => {
@@ -138,7 +140,6 @@ describe("attachment service", () => {
       await Promise.all([persist, collect]);
     }
 
-    expect(garbageCollections).toHaveLength(1);
-    expect(garbageCollections[0]).toContain("assistant-preview");
+    expect(garbageCollections).toEqual([["assistant-preview"]]);
   });
 });

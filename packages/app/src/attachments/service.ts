@@ -46,10 +46,20 @@ export function startAnsweringOtherWindowSweeps(): void {
   getOtherWindowHolds();
 }
 
+/** Test-only hook: forgets the recent saves, so each test's sweep sees only its own. */
+export function __resetRecentlyPersistedForTests(): void {
+  recentlyPersisted.clear();
+}
+
 /** Test-only hook: this module instance speaks on the given channel, as one app window. */
 export function __useOtherWindowChannelForTests(
   channel: HoldChannel | null,
-  options: { windowId?: string; replyTimeoutMs?: number; discoveryMs?: number } = {},
+  options: {
+    windowId?: string;
+    replyTimeoutMs?: number;
+    holdTimeoutMs?: number;
+    discoveryMs?: number;
+  } = {},
 ): void {
   otherWindowHolds = channel
     ? createOtherWindowHolds({ channel, holdForPeerSweep, ...options })

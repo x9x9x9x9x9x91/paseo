@@ -97,7 +97,7 @@ function createSharedStore(initialIds: string[]) {
 async function openWindow(
   channel: HoldChannel,
   store: AttachmentStore,
-  options: { replyTimeoutMs?: number; discoveryMs?: number } = {},
+  options: { replyTimeoutMs?: number; holdTimeoutMs?: number; discoveryMs?: number } = {},
 ): Promise<ServiceModule> {
   vi.resetModules();
   const service = await import("./service");
@@ -178,17 +178,22 @@ describe("attachment sweeps across app windows", () => {
     expect(Array.from(shared.ids)).toEqual(["late"]);
   });
 
-  it("skips a sweep while another window does not answer, then forgets that window", async () => {
+  it("skips sweeps while another window does not answer, then forgets that window", async () => {
     const bus = createBus();
     const shared = createSharedStore(["orphan"]);
     const silentWindow = bus.channel();
-    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 30 });
+    const windowB = await openWindow(bus.channel(), shared.store, {
+      replyTimeoutMs: 30,
+      holdTimeoutMs: 50,
+    });
     silentWindow.send({ type: "hello", from: "silent" });
     await settle();
 
     await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
     expect(Array.from(shared.ids)).toEqual(["orphan"]);
 
+    // Two requests missed in a row and silent past the hold timeout: gone.
     await windowB.garbageCollectAttachments({ referencedIds: new Set() });
     expect(Array.from(shared.ids)).toEqual([]);
   });
@@ -205,6 +210,9 @@ describe("attachment sweeps across app windows", () => {
     const save = windowA.persistAttachmentFromBytes({ id: "large", ...bytes });
     await settle();
 
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual(["screenshot", "orphan"]);
+    // A sweep queued behind the first (a draft saved meanwhile) still waits for A.
     await windowB.garbageCollectAttachments({ referencedIds: new Set() });
     expect(Array.from(shared.ids)).toEqual(["screenshot", "orphan"]);
     openSave();
