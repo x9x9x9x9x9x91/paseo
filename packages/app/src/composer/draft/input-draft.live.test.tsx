@@ -29,6 +29,8 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
 
 vi.mock("@/attachments/service", () => ({
   garbageCollectAttachments: async () => undefined,
+  setWindowAttachmentIdsCollector: () => undefined,
+  startAnsweringOtherWindowSweeps: () => undefined,
 }));
 
 vi.mock("@/hooks/use-agent-form-state", () => ({
