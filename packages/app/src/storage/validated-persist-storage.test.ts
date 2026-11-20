@@ -59,6 +59,26 @@ describe("createValidatedPersistStorage", () => {
     expect(backing.values.get("settings")).toBe(stored);
   });
 
+  it("leaves a later build's unknown keys out of its next write", async () => {
+    const backing = new MemoryStorage();
+    backing.values.set(
+      "settings",
+      JSON.stringify({
+        state: { enabled: true, landing: "workers" },
+        version: 1,
+        written: "later",
+      }),
+    );
+    const storage = createValidatedPersistStorage(backing, StateSchema);
+    const read = await storage.getItem("settings");
+    if (!read) throw new Error("nothing read");
+
+    await storage.setItem("settings", { ...read, state: { enabled: false } });
+    expect(backing.values.get("settings")).toBe(
+      JSON.stringify({ state: { enabled: false }, version: 1 }),
+    );
+  });
+
   it("returns schema-validated state", async () => {
     const backing = new MemoryStorage();
     backing.values.set("settings", JSON.stringify({ state: { enabled: true }, version: 1 }));

@@ -83,7 +83,9 @@ export function createDaemonFileSession(
           mimeType,
           path: `${target.cwd}/${target.path}`,
           contentLength: bytes.byteLength,
-          contentKey: String(Date.now()),
+          // A part of its own per preview: two of one file in one millisecond, in this window or
+          // another, would share an id, and the first one closed would delete the other's file.
+          contentKey: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         }),
         bytes,
         mimeType,

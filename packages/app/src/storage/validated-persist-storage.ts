@@ -8,7 +8,8 @@ import type { PersistStorage, StateStorage, StorageValue } from "zustand/middlew
  * adds reads back without it instead of failing the read (ALM-5127); the envelope reads loosely
  * for the same reason. A list or record whose entries a later build may add kinds to reads them
  * with `readableEntries` / `readableRecordEntries`. A store with no migrations of its own passes
- * `migrate: keepStoredState`.
+ * `migrate: keepStoredState`. A write stores the parsed value, so that build's next write leaves
+ * the unknown keys out.
  */
 export function createValidatedPersistStorage<State>(
   backingStorage: StateStorage,
@@ -87,7 +88,8 @@ export function createValidatedPersistStorage<State>(
  * The `migrate` of a persisted store with no migrations of its own. Without one, zustand drops a
  * stored state whose version is not the store's, so a later build that raises the version would
  * leave an older build with the defaults, written over the store at its next change (ALM-5138).
- * The storage has parsed the state against the store's schema already.
+ * The storage has parsed the state against the store's schema already. Zustand writes a migrated
+ * state back as it loads, so an older build stores it at once, in its own shape and version.
  */
 export function keepStoredState<State>(persistedState: unknown): State {
   return persistedState as State;

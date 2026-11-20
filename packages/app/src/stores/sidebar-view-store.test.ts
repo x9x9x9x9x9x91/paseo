@@ -251,6 +251,31 @@ describe("sidebar view store", () => {
     });
   });
 
+  it("reads a stored label grouping as project when it was stored at the current version", async () => {
+    // Set before the stored value is written: every setState persists the store over it.
+    useSidebarViewStore.setState({ groupMode: "status" });
+    const version = useSidebarViewStore.persist.getOptions().version;
+    await AsyncStorage.setItem(
+      "sidebar-view",
+      JSON.stringify({ state: { groupMode: "label", hostFilters: ["host-a"] }, version }),
+    );
+
+    await useSidebarViewStore.persist.rehydrate();
+
+    expect(useSidebarViewStore.getState()).toMatchObject({
+      groupMode: "project",
+      hostFilters: ["host-a"],
+    });
+    await AsyncStorage.removeItem("sidebar-view");
+  });
+
+  it("reads a stored label grouping as project through the version migration", () => {
+    expect(migrateSidebarViewState({ groupMode: "label" }).groupMode).toBe("project");
+    expect(migrateSidebarViewState({ groupModeByServerId: { "host-a": "label" } }).groupMode).toBe(
+      "project",
+    );
+  });
+
   it("falls back to the legacy storage key when the new key is empty", async () => {
     const storage = createMemoryStorage({
       "sidebar-view": null,
