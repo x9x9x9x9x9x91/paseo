@@ -1,9 +1,23 @@
 import type { KeyboardInputEvent } from "@/keyboard";
 
+/** Input types with no caret, where Home/End keep jumping to the rows. */
+const NON_TEXT_INPUT_TYPES = new Set([
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "hidden",
+  "image",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+]);
+
 function isTextEditingElement(element: Element | null): boolean {
   if (!(element instanceof HTMLElement)) return false;
-  if (element.isContentEditable) return true;
-  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+  if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true;
+  return element instanceof HTMLInputElement && !NON_TEXT_INPUT_TYPES.has(element.type);
 }
 
 /**
