@@ -1359,6 +1359,8 @@ export const fr: TranslationResources = {
       menu: "Actions du dossier",
       moveTo: "Déplacer vers un dossier",
       takeOut: "Sortir du dossier",
+      moveLooseHere: "Déplacer ici tous les autres projets",
+      landHere: "Les nouveaux projets arrivent ici",
       create: "Nouveau dossier…",
       createConfirm: "Créer le dossier",
       name: "Nom du dossier",
