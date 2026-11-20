@@ -30,19 +30,6 @@ function folderRow(page: Page) {
   return page.locator('[data-testid^="sidebar-folder-row-"]');
 }
 
-// The New folder page can mount again as it opens and drop the typed name, which leaves Create
-// disabled, so the name is typed again until Create takes it.
-async function createFolderFromMenu(page: Page, name: string) {
-  const nameField = page.getByTestId("sidebar-folder-create-name");
-  const submit = page.getByTestId("sidebar-folder-create-submit");
-  await page.getByTestId("sidebar-folder-create").click();
-  await expect(async () => {
-    await nameField.fill(name);
-    await expect(submit).toBeEnabled({ timeout: 1_000 });
-  }).toPass();
-  await submit.click();
-}
-
 function folderRowNamed(page: Page, name: string) {
   return folderRow(page).filter({ hasText: name });
 }
