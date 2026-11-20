@@ -285,7 +285,7 @@ test.describe("Sidebar folders", () => {
         ).toHaveCount(0);
       });
     } finally {
-      for (const workspace of seeded.reverse()) await workspace.cleanup();
+      for (const workspace of seeded.toReversed()) await workspace.cleanup();
     }
   });
 
