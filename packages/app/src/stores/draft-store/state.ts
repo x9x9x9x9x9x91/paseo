@@ -4,6 +4,7 @@ import {
   type UserComposerAttachment,
 } from "@/attachments/types";
 import { PluginResourceComposerAttachmentSchema } from "@/plugins/attachments";
+import { mergeFollowedEntries } from "@/storage/follow-other-windows";
 import { z } from "zod";
 
 export const DRAFT_STORE_VERSION = 5;
@@ -248,6 +249,55 @@ export function pruneFinalizedDraftRecords(input: {
     next[draftKey] = record;
   }
   return changed ? next : input.drafts;
+}
+
+function storedUpdatedAt(value: unknown): number {
+  if (value && typeof value === "object" && "updatedAt" in value) {
+    const { updatedAt } = value as { updatedAt: unknown };
+    if (typeof updatedAt === "number") return updatedAt;
+  }
+  return -Infinity;
+}
+
+/** This window's draft wins when it changed after the other window's copy, or its removal. */
+function isLaterLocalDraft(entry: {
+  local: DraftRecord;
+  stored: DraftRecord | undefined;
+  before: unknown;
+}): boolean {
+  return entry.local.updatedAt > (entry.stored?.updatedAt ?? storedUpdatedAt(entry.before));
+}
+
+function asEntry(record: DraftRecord | null | undefined): Record<string, DraftRecord> {
+  return record ? { draft: record } : {};
+}
+
+/**
+ * Takes in the drafts other app windows wrote since `before`, and keeps every other draft of this
+ * window as it is, so two windows do not drop each other's drafts (ALM-5115). Where both changed
+ * one draft, the later edit wins: a window writes its drafts at most every 200 ms, so its last
+ * keystrokes may not be stored yet.
+ */
+export function mergeFollowedDraftState(input: {
+  before: Record<string, unknown>;
+  stored: Partial<DraftStoreState>;
+  local: DraftStoreState;
+}): DraftStoreState {
+  const drafts = mergeFollowedEntries({
+    before: input.before.drafts,
+    storedRaw: input.stored.drafts,
+    stored: input.stored.drafts ?? {},
+    local: input.local.drafts,
+    keepLocal: isLaterLocalDraft,
+  });
+  const createModalDraft = mergeFollowedEntries({
+    before: asEntry(input.before.createModalDraft as DraftRecord | null | undefined),
+    storedRaw: asEntry(input.stored.createModalDraft),
+    stored: asEntry(input.stored.createModalDraft),
+    local: asEntry(input.local.createModalDraft),
+    keepLocal: isLaterLocalDraft,
+  }).draft;
+  return { drafts, createModalDraft: createModalDraft ?? null };
 }
 
 export function applyClearDraftRecord(input: {

@@ -15,6 +15,7 @@ import { useWorkspaceAttachmentsStore } from "@/attachments/workspace-attachment
 import {
   applyClearDraftRecord,
   editDraftRecordText,
+  mergeFollowedDraftState,
   collectReferencedAttachmentIdsFromState,
   DRAFT_STORE_VERSION,
   isAttachmentMetadata,
@@ -36,6 +37,10 @@ import {
 } from "./migration";
 import { createDraftPersistStorage } from "./persistence";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import {
+  followOtherWindowsWritesByKey,
+  type OtherWindowsWrites,
+} from "@/storage/follow-other-windows";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { applyMetadataPatch } from "@/composer/draft/metadata";
 import { hasDraftContent } from "@/composer/draft/input-draft-core";
@@ -91,6 +96,9 @@ let gcScheduled = false;
 const draftPersistStorage = createDraftPersistStorage(
   createValidatedPersistStorage(AsyncStorage, PersistedDraftStoreSchema),
 );
+
+let otherWindowsDraftWrites: OtherWindowsWrites | null = null;
+let draftsRestored = false;
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();
@@ -155,16 +163,12 @@ async function runAttachmentGc(): Promise<void> {
   gcScheduled = false;
   const nowMs = Date.now();
 
-  useDraftStore.setState((state) => {
-    const prunedDrafts = pruneFinalizedDraftRecords({ drafts: state.drafts, nowMs });
-    if (prunedDrafts === state.drafts) {
-      return state;
-    }
-    return {
-      ...state,
-      drafts: prunedDrafts,
-    };
-  });
+  // Persist writes on every setState, an unchanged one too: set only when a draft was pruned.
+  const { drafts } = useDraftStore.getState();
+  const prunedDrafts = pruneFinalizedDraftRecords({ drafts, nowMs });
+  if (prunedDrafts !== drafts) {
+    useDraftStore.setState({ drafts: prunedDrafts });
+  }
 
   const referencedIds = new Set<string>();
   for (const id of useDraftStore.getState().collectActiveAttachmentIds()) {
@@ -490,6 +494,15 @@ export const useDraftStore = create<DraftStore>()(
       version: DRAFT_STORE_VERSION,
       storage: draftPersistStorage,
       partialize: ({ drafts, createModalDraft }) => ({ drafts, createModalDraft }),
+      merge: (persistedState, currentState) => {
+        const stored = persistedState as Partial<DraftStoreState> | undefined;
+        const before = otherWindowsDraftWrites?.takeStateBefore();
+        if (!before || !stored) return { ...currentState, ...stored };
+        return {
+          ...currentState,
+          ...mergeFollowedDraftState({ before, stored, local: currentState }),
+        };
+      },
       migrate: (state) =>
         migratePersistedState(state, {
           migrateLegacyImages,
@@ -497,6 +510,10 @@ export const useDraftStore = create<DraftStore>()(
         }),
       onRehydrateStorage: () => {
         return () => {
+          // Start-up only: reading in another window's write sweeps nothing, since this window
+          // cannot see the attachments the other one holds in memory alone (ALM-5115).
+          if (draftsRestored) return;
+          draftsRestored = true;
           void migrateAllLegacyDrafts();
           scheduleAttachmentGc();
         };
@@ -504,3 +521,16 @@ export const useDraftStore = create<DraftStore>()(
     },
   ),
 );
+
+// Two app windows keep their own drafts in memory and write all of them; this takes in what the
+// other windows wrote, draft by draft (ALM-5115).
+otherWindowsDraftWrites = followOtherWindowsWritesByKey(
+  useDraftStore,
+  undefined,
+  () => draftsRestored,
+);
+// A write still waiting for the interval was made before the merge, so it would put back the old
+// copy of what another window just wrote; written again from the merged drafts instead.
+useDraftStore.persist.onFinishHydration(() => {
+  if (draftPersistStorage?.hasPending()) useDraftStore.setState({});
+});
