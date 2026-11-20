@@ -524,7 +524,11 @@ export const useDraftStore = create<DraftStore>()(
 
 // Two app windows keep their own drafts in memory and write all of them; this takes in what the
 // other windows wrote, draft by draft (ALM-5115).
-otherWindowsDraftWrites = followOtherWindowsWritesByKey(useDraftStore);
+otherWindowsDraftWrites = followOtherWindowsWritesByKey(
+  useDraftStore,
+  undefined,
+  () => draftsRestored,
+);
 // A write still waiting for the interval was made before the merge, so it would put back the old
 // copy of what another window just wrote; written again from the merged drafts instead.
 useDraftStore.persist.onFinishHydration(() => {

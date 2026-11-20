@@ -40,8 +40,9 @@ export function defaultStorageEventSource(): StorageEventSource | null {
  * On web the windows share one `localStorage`, and the browser fires `storage` only in the
  * windows that did not write. Zustand's rehydrate writes nothing back, so two windows do not
  * echo each other, as long as nothing the store runs on a hydration (`onRehydrateStorage`,
- * `onFinishHydration`) writes either; a store's start-up work belongs to its first hydration. A removed key is left alone: the window keeps what it shows and writes it on
- * its next change. Native runs one window, so there is nothing to follow there.
+ * `onFinishHydration`) writes either; a store's start-up work belongs to its first hydration.
+ * A removed key is left alone: the window keeps what it shows and writes it on its next change.
+ * Native runs one window, so there is nothing to follow there.
  */
 export function followOtherWindowsWrites(
   store: PersistedStoreLike,
@@ -91,10 +92,16 @@ function storedStateOf(raw: string | null | undefined): StoredState {
  * from the `storage` event. Writes before the store's first hydration are left to that hydration,
  * which reads the latest stored state whole. A follow writes only a change of this window's own
  * that was not stored yet (the drafts' interval).
+ *
+ * `isRestored` says whether that first hydration has ended. Zustand's `onFinishHydration`, the
+ * default, never fires when the first read fails, and every later write would then replace the
+ * store whole; a store that must not lose unstored entries passes a latch its
+ * `onRehydrateStorage` callback sets, which runs on a failed read too.
  */
 export function followOtherWindowsWritesByKey(
   store: HydratingStoreLike,
   source: StorageEventSource | null = defaultStorageEventSource(),
+  isRestored?: () => boolean,
 ): OtherWindowsWrites {
   let stateBefore: StoredState | undefined;
   let hydratedOnce = store.persist.hasHydrated();
@@ -111,7 +118,8 @@ export function followOtherWindowsWritesByKey(
   const listener = (event: StorageEventLike) => {
     if (event.key !== name || event.newValue === null) return;
     // Two writes before one merge: the state before the first is what both changed from.
-    if (hydratedOnce && stateBefore === undefined) stateBefore = storedStateOf(event.oldValue);
+    const restored = isRestored ? isRestored() : hydratedOnce;
+    if (restored && stateBefore === undefined) stateBefore = storedStateOf(event.oldValue);
     void store.persist.rehydrate();
   };
   source.addEventListener("storage", listener);

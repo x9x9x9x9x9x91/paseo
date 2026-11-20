@@ -162,7 +162,11 @@ interface NotesState {
 
 const NOTES_KEY = "notes";
 
-function createKeyedWindowStore(storage: StateStorage, source: StorageEventSource | null) {
+function createKeyedWindowStore(
+  storage: StateStorage,
+  source: StorageEventSource | null,
+  isRestored?: () => boolean,
+) {
   let writes: OtherWindowsWrites | null = null;
   const store = create<NotesState>()(
     persist(
@@ -201,7 +205,7 @@ function createKeyedWindowStore(storage: StateStorage, source: StorageEventSourc
       },
     ),
   );
-  writes = followOtherWindowsWritesByKey(store, source);
+  writes = followOtherWindowsWritesByKey(store, source, isRestored);
   return { store, writes };
 }
 
@@ -290,5 +294,42 @@ describe("followOtherWindowsWritesByKey", () => {
 
     expect(writes.takeStateBefore()).toBeUndefined();
     expect(windowB.getState().notesById).toEqual({ early: { text: "before B read", at: 1 } });
+  });
+
+  it("follows key by key after a first read that failed, when the store says it is restored", async () => {
+    const shared = createSharedStorage();
+    let reads = 0;
+    const failingFirstRead: StateStorage = {
+      ...shared.storage,
+      getItem: async (name) => {
+        reads += 1;
+        if (reads === 1) throw new Error("first read failed");
+        return shared.storage.getItem(name);
+      },
+    };
+    const eventsOfB = createEventSource();
+    let restored = false;
+    const { store: windowB } = createKeyedWindowStore(
+      failingFirstRead,
+      eventsOfB.source,
+      () => restored,
+    );
+    await settle();
+    restored = true;
+    expect(windowB.persist.hasHydrated()).toBe(false);
+    windowB.setState({ notesById: { unstored: { text: "only in B", at: 5 } } });
+    shared.values.delete(NOTES_KEY);
+
+    shared.values.set(
+      NOTES_KEY,
+      JSON.stringify({ state: { notesById: { fromA: { text: "written by A", at: 1 } } } }),
+    );
+    eventsOfB.fire(NOTES_KEY, shared.values.get(NOTES_KEY) ?? null, null);
+    await settle();
+
+    expect(windowB.getState().notesById).toEqual({
+      unstored: { text: "only in B", at: 5 },
+      fromA: { text: "written by A", at: 1 },
+    });
   });
 });
