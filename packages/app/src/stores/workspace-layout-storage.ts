@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readableRecordEntries } from "@/storage/validated-persist-storage";
 import type { SplitNode, WorkspaceLayout } from "./workspace-layout-actions";
 
 // COMPAT(providerOptionControls): added in v0.15.0, remove after 2027-05-01. Layouts saved before
@@ -77,17 +78,40 @@ const WorkspaceTabStorageSchema = z.object({
   createdAt: z.number(),
   state: z.json().optional(),
 });
+// A tab this build cannot read, such as one of a kind a later build added, leaves its pane with
+// its id, so it fails only itself rather than the whole layout (ALM-5138).
+function dropUnreadableTabs(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("tabs" in value)) return value;
+  if (!Array.isArray(value.tabs)) return value;
+  const pane = value as { tabs: unknown[]; tabIds?: unknown; focusedTabId?: unknown };
+  const dropped = new Set<unknown>();
+  const tabs = pane.tabs.filter((tab) => {
+    if (WorkspaceTabStorageSchema.safeParse(tab).success) return true;
+    if (typeof tab === "object" && tab !== null && "tabId" in tab) dropped.add(tab.tabId);
+    return false;
+  });
+  if (tabs.length === pane.tabs.length) return value;
+  return {
+    ...pane,
+    tabs,
+    tabIds: Array.isArray(pane.tabIds) ? pane.tabIds.filter((id) => !dropped.has(id)) : pane.tabIds,
+    focusedTabId: dropped.has(pane.focusedTabId) ? null : pane.focusedTabId,
+  };
+}
 const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
   z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("pane"),
-      pane: z.object({
-        id: z.string(),
-        tabIds: z.array(z.string()),
-        focusedTabId: z.string().nullable(),
-        tabs: z.array(WorkspaceTabStorageSchema).optional(),
-        hidden: z.boolean().optional(),
-      }),
+      pane: z.preprocess(
+        dropUnreadableTabs,
+        z.object({
+          id: z.string(),
+          tabIds: z.array(z.string()),
+          focusedTabId: z.string().nullable(),
+          tabs: z.array(WorkspaceTabStorageSchema).optional(),
+          hidden: z.boolean().optional(),
+        }),
+      ),
     }),
     z.object({
       kind: z.literal("group"),
@@ -107,7 +131,8 @@ const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.object({
 });
 export const WorkspaceLayoutPersistedStateSchema = z.object({
   pinnedAgentIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
-  layoutByWorkspace: z.record(z.string(), WorkspaceLayoutStorageSchema),
+  // One workspace's layout this build cannot read starts empty alone (ALM-5138).
+  layoutByWorkspace: readableRecordEntries(WorkspaceLayoutStorageSchema),
   splitSizesByWorkspace: z.record(z.string(), z.record(z.string(), z.array(z.number()))).optional(),
   explorerSidebarWidthByWorkspace: z.record(z.string(), z.number()).optional(),
   // COMPAT(explorerSidebarWidth): added in v0.6, remove after 2027-08-25.
