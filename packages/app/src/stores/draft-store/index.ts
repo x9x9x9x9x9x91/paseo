@@ -98,6 +98,7 @@ const draftPersistStorage = createDraftPersistStorage(
 );
 
 let otherWindowsDraftWrites: OtherWindowsWrites | null = null;
+let draftsRestored = false;
 
 export function flushDraftPersistStorage(): Promise<void> {
   return draftPersistStorage?.flush() ?? Promise.resolve();
@@ -162,16 +163,12 @@ async function runAttachmentGc(): Promise<void> {
   gcScheduled = false;
   const nowMs = Date.now();
 
-  useDraftStore.setState((state) => {
-    const prunedDrafts = pruneFinalizedDraftRecords({ drafts: state.drafts, nowMs });
-    if (prunedDrafts === state.drafts) {
-      return state;
-    }
-    return {
-      ...state,
-      drafts: prunedDrafts,
-    };
-  });
+  // Persist writes on every setState, an unchanged one too: set only when a draft was pruned.
+  const { drafts } = useDraftStore.getState();
+  const prunedDrafts = pruneFinalizedDraftRecords({ drafts, nowMs });
+  if (prunedDrafts !== drafts) {
+    useDraftStore.setState({ drafts: prunedDrafts });
+  }
 
   const referencedIds = new Set<string>();
   for (const id of useDraftStore.getState().collectActiveAttachmentIds()) {
@@ -513,6 +510,10 @@ export const useDraftStore = create<DraftStore>()(
         }),
       onRehydrateStorage: () => {
         return () => {
+          // Start-up only: reading in another window's write sweeps nothing, since this window
+          // cannot see the attachments the other one holds in memory alone (ALM-5115).
+          if (draftsRestored) return;
+          draftsRestored = true;
           void migrateAllLegacyDrafts();
           scheduleAttachmentGc();
         };

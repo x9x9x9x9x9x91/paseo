@@ -39,7 +39,8 @@ export function defaultStorageEventSource(): StorageEventSource | null {
  *
  * On web the windows share one `localStorage`, and the browser fires `storage` only in the
  * windows that did not write. Zustand's rehydrate writes nothing back, so two windows do not
- * echo each other. A removed key is left alone: the window keeps what it shows and writes it on
+ * echo each other, as long as nothing the store runs on a hydration (`onRehydrateStorage`,
+ * `onFinishHydration`) writes either; a store's start-up work belongs to its first hydration. A removed key is left alone: the window keeps what it shows and writes it on
  * its next change. Native runs one window, so there is nothing to follow there.
  */
 export function followOtherWindowsWrites(
@@ -88,7 +89,8 @@ function storedStateOf(raw: string | null | undefined): StoredState {
  * entry it has not written yet, state that is never stored, and the identity of what it shows
  * (ALM-5115). The store reads `takeStateBefore()` in its `merge`; the earlier stored value comes
  * from the `storage` event. Writes before the store's first hydration are left to that hydration,
- * which reads the latest stored state whole.
+ * which reads the latest stored state whole. A follow writes only a change of this window's own
+ * that was not stored yet (the drafts' interval).
  */
 export function followOtherWindowsWritesByKey(
   store: HydratingStoreLike,
