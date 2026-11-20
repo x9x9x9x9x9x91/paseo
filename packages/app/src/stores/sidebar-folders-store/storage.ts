@@ -17,7 +17,9 @@ export const SIDEBAR_FOLDER_LANDING_STORAGE_KEY = "sidebar-folder-landing";
  *
  * The tick is written on every write, `null` when unticked, never removed: another window
  * follows a write but leaves a removed key alone (`followOtherWindowsWrites`). A tick stored in
- * the folders' key, by a build with ALM-5108 and not this, still reads; the tick's own key wins.
+ * the folders' key, by a build with ALM-5108 and not this (0.16.2-fork.12), still reads, and the
+ * read moves it to its own key at once, so an older build opened before the next write keeps the
+ * folders; a tick already in its own key wins.
  */
 export function createSidebarFoldersStorage(
   backingStorage: StateStorage,
@@ -34,6 +36,21 @@ export function createSidebarFoldersStorage(
         const stored = await folders.getItem(name);
         if (!stored) return null;
         const tick = await landing.getItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY);
+        const { landingFolderId, knownProjectKeys, ...rest } = stored.state;
+        if (landingFolderId !== undefined || knownProjectKeys !== undefined) {
+          await Promise.all([
+            folders.setItem(name, { ...stored, state: rest }),
+            tick
+              ? undefined
+              : landing.setItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY, {
+                  state: {
+                    landingFolderId: landingFolderId ?? null,
+                    knownProjectKeys: knownProjectKeys ?? [],
+                  },
+                  version: stored.version,
+                }),
+          ]);
+        }
         return tick ? { ...stored, state: { ...stored.state, ...tick.state } } : stored;
       } finally {
         reading -= 1;

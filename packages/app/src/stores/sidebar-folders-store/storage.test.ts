@@ -82,7 +82,7 @@ describe("sidebar folders storage", () => {
     });
   });
 
-  it("reads a tick stored in the folders' key, the tick's own key winning", async () => {
+  it("moves a tick stored in the folders' key to its own key on read, so an older build keeps the folders", async () => {
     const backing = new MemoryStorage();
     backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
     const storage = createSidebarFoldersStorage(backing);
@@ -91,14 +91,27 @@ describe("sidebar folders storage", () => {
       version: 0,
     });
 
-    backing.setItem(
-      SIDEBAR_FOLDER_LANDING_STORAGE_KEY,
-      JSON.stringify({ state: { landingFolderId: null, knownProjectKeys: [] }, version: 0 }),
-    );
+    const foldersValue = stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY);
+    expect(OlderBuildEnvelopeSchema.safeParse(foldersValue).success).toBe(true);
+    expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
+      state: { landingFolderId: "workers", knownProjectKeys: ["alma", "chats"] },
+      version: 0,
+    });
+  });
+
+  it("reads the tick's own key over one in the folders' key, and clears the folders' key", async () => {
+    const backing = new MemoryStorage();
+    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
+    const unticked = { state: { landingFolderId: null, knownProjectKeys: [] }, version: 0 };
+    backing.setItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY, JSON.stringify(unticked));
+    const storage = createSidebarFoldersStorage(backing);
+
     await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
       state: { ...ticked, landingFolderId: null, knownProjectKeys: [] },
       version: 0,
     });
+    expect(OlderBuildEnvelopeSchema.safeParse(stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY)).success).toBe(true);
+    expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual(unticked);
   });
 
   it("reads folders a later build stored with keys this one does not know, and keeps them", async () => {
