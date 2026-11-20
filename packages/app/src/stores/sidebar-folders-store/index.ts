@@ -2,7 +2,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
-import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import {
   createSidebarFolder,
   EMPTY_SIDEBAR_FOLDERS,
@@ -12,7 +11,6 @@ import {
   moveSidebarProjectToFolder,
   NO_FOLDS_UNDER_FILTER,
   persistedSidebarFolders,
-  PersistedSidebarFoldersSchema,
   removeSidebarFolder,
   renameSidebarFolder,
   setSidebarLandingFolder,
@@ -23,6 +21,11 @@ import {
   type SidebarFoldsUnderFilter,
   type SidebarLandingProject,
 } from "./state";
+import {
+  createSidebarFoldersStorage,
+  SIDEBAR_FOLDER_LANDING_STORAGE_KEY,
+  SIDEBAR_FOLDERS_STORAGE_KEY,
+} from "./storage";
 
 export type {
   SidebarFolder,
@@ -93,8 +96,8 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
         })),
     }),
     {
-      name: "sidebar-project-folders",
-      storage: createValidatedPersistStorage(AsyncStorage, PersistedSidebarFoldersSchema),
+      name: SIDEBAR_FOLDERS_STORAGE_KEY,
+      storage: createSidebarFoldersStorage(AsyncStorage),
       partialize: persistedSidebarFolders,
       merge: (persistedState, currentState) =>
         mergePersistedSidebarFolders(persistedState, currentState),
@@ -103,3 +106,10 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
 );
 
 followOtherWindowsWrites(useSidebarFoldersStore);
+// The landing tick has a key of its own (see `createSidebarFoldersStorage`); a read takes both.
+followOtherWindowsWrites({
+  persist: {
+    getOptions: () => ({ name: SIDEBAR_FOLDER_LANDING_STORAGE_KEY }),
+    rehydrate: () => useSidebarFoldersStore.persist.rehydrate(),
+  },
+});

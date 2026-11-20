@@ -108,21 +108,19 @@ export function reconcileMobilePanel(
 }
 
 const ExplorerTabSchema = z.enum(["changes", "files", "pr"]);
-const DesktopSidebarStorageSchema = z.strictObject({
+const DesktopSidebarStorageSchema = z.object({
   agentListOpen: z.boolean().optional(),
   focusModeEnabled: z.boolean().optional(),
   zoomed: z.boolean().optional(),
   focused: z.boolean().optional(),
   // Accepted only so migration can discard the former docked explorer sidebar.
-  // The schema is strict and a parse failure drops the whole entry, so removing
-  // this key outright would wipe every upgrading user's panel state.
   fileExplorerOpen: z.boolean().optional(),
 });
 
-export const PanelPersistedStateSchema = z.strictObject({
+export const PanelPersistedStateSchema = z.object({
   mobileView: z.enum(["agent", "agent-list", "file-explorer"]).optional(),
   mobilePanel: z
-    .strictObject({
+    .object({
       target: z.enum(["agent", "agent-list", "file-explorer"]),
       revision: z.number().int().nonnegative(),
     })

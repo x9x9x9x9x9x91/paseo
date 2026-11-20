@@ -221,8 +221,8 @@ describe("sidebar view store", () => {
     });
   });
 
-  // The persisted schema is a `z.strictObject` behind `createValidatedPersistStorage`, so a key
-  // the schema does not list fails the parse and takes every other sidebar setting down with it.
+  // The persisted schema behind `createValidatedPersistStorage` drops a key it does not list, so
+  // every key the migration returns has to be one the schema lists, or it is lost at the next write.
   it("carries a persisted project filter through the version migration", () => {
     expect(
       migrateSidebarViewState({

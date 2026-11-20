@@ -1,13 +1,20 @@
 import { z } from "zod";
 import type { PersistStorage, StateStorage, StorageValue } from "zustand/middleware";
 
+/**
+ * A persisted store's storage that drops a stored value it cannot parse. Give it a `z.object`
+ * state schema, never `z.strictObject`: a key a later build adds then reads back without it,
+ * where a strict schema fails the parse and this storage removes the whole value, so opening an
+ * older build would wipe the store (ALM-5127). The envelope reads loosely for the same reason.
+ * A write stores the parsed value, so that build's next write leaves the unknown keys out.
+ */
 export function createValidatedPersistStorage<State>(
   backingStorage: StateStorage,
   stateSchema: z.ZodType<State>,
   // Opt in only when callers preserve state references until values change.
   options: { skipUnchanged?: boolean } = {},
 ): PersistStorage<State> {
-  const envelopeSchema = z.strictObject({
+  const envelopeSchema = z.object({
     state: stateSchema,
     version: z.number().int().nonnegative().optional(),
   });
