@@ -189,6 +189,103 @@ test.describe("Sidebar folders", () => {
     }
   });
 
+  // One click fills a folder with every loose repo, and a tick lands each new repo in it; plain
+  // folders, where the chats live, stay out of both (ALM-5108).
+  test("fills a folder with the loose repos and lands new ones in it", async ({
+    page,
+  }, testInfo) => {
+    const chats = await seedWorkspace({
+      repoPrefix: "folders-land-chats-",
+      title: "My chat",
+      git: false,
+    });
+    const alma = await seedWorkspace({ repoPrefix: "folders-land-alma-", title: "Alma lane" });
+    const substrate = await seedWorkspace({
+      repoPrefix: "folders-land-substrate-",
+      title: "Substrate lane",
+    });
+    const seeded = [chats, alma, substrate];
+    const serverId = getServerId();
+    const workspaceRow = (workspaceId: string) =>
+      page.getByTestId(`sidebar-workspace-row-${serverId}:${workspaceId}`);
+    const projectRow = (projectKey: string) =>
+      page.getByTestId(`sidebar-project-row-${projectKey}`);
+    const folderMembers = page.locator('[data-testid^="sidebar-folder-projects-"]');
+    const landingRow = page.locator('[data-testid^="sidebar-folder-menu-landing-"]');
+    const sidebar = page.getByTestId("sidebar-project-workspace-list-scroll").first();
+    const openFolderMenu = async () => {
+      await folderRowNamed(page, "Workers").click({ button: "right" });
+    };
+
+    try {
+      await gotoAppShell(page);
+      for (const workspace of seeded) {
+        await expect(workspaceRow(workspace.workspaceId)).toBeVisible({ timeout: 30_000 });
+      }
+      await openMoveToFolder(page, alma.projectKey);
+      await createFolderFromMenu(page, "Workers");
+      await expect(projectRow(alma.projectKey)).toHaveCount(0);
+
+      await test.step("one click moves every loose repo in, the plain folder stays", async () => {
+        await openFolderMenu();
+        await page.getByRole("menuitem", { name: "Move all other projects here" }).click();
+        await expect(projectRow(substrate.projectKey)).toHaveCount(0);
+        await expect(projectRow(chats.projectKey)).toBeVisible();
+        await expect(workspaceRow(chats.workspaceId)).toBeVisible();
+        await sidebar.screenshot({ path: testInfo.outputPath("land-1-filled.png") });
+      });
+
+      await test.step("the tick is kept, also after a reload", async () => {
+        await openFolderMenu();
+        await expect(landingRow).toHaveAttribute("aria-checked", "false");
+        await page.getByRole("menuitem", { name: "New projects land here" }).click();
+        await page.reload();
+        await expect(workspaceRow(chats.workspaceId)).toBeVisible({ timeout: 30_000 });
+        await openFolderMenu();
+        await expect(landingRow).toHaveAttribute("aria-checked", "true");
+        await page.keyboard.press("Escape");
+      });
+
+      await test.step("a new repo lands in the folder, a new plain folder stays out", async () => {
+        const crisis = await seedWorkspace({
+          repoPrefix: "folders-land-crisis-",
+          title: "Crisis lane",
+        });
+        seeded.push(crisis);
+        const notes = await seedWorkspace({
+          repoPrefix: "folders-land-notes-",
+          title: "Notes",
+          git: false,
+        });
+        seeded.push(notes);
+        await expect(workspaceRow(notes.workspaceId)).toBeVisible({ timeout: 30_000 });
+        await folderRowNamed(page, "Workers").click();
+        await expect(folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`))
+          .toBeVisible({ timeout: 30_000 });
+        await expect(projectRow(notes.projectKey)).toBeVisible();
+        await expect(
+          folderMembers.getByTestId(`sidebar-project-row-${notes.projectKey}`),
+        ).toHaveCount(0);
+        await sidebar.screenshot({ path: testInfo.outputPath("land-2-new-landed.png") });
+
+        // A landed repo taken out stays out, after a reload too.
+        await openMoveToFolder(page, crisis.projectKey);
+        await page.getByTestId("sidebar-folder-take-out").click();
+        await expect(
+          folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`),
+        ).toHaveCount(0);
+        await page.reload();
+        await expect(projectRow(crisis.projectKey)).toBeVisible({ timeout: 30_000 });
+        await expect(folderMembers.getByTestId(`sidebar-project-row-${alma.projectKey}`)).toBeVisible();
+        await expect(
+          folderMembers.getByTestId(`sidebar-project-row-${crisis.projectKey}`),
+        ).toHaveCount(0);
+      });
+    } finally {
+      for (const workspace of seeded.reverse()) await workspace.cleanup();
+    }
+  });
+
   // A project taken from the middle of a folder, loose or into a new folder, must not split that
   // folder in the project order: a filter showing it beside a later member would then put the
   // folder below it (ALM-5055).

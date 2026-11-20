@@ -6,20 +6,30 @@ import { createValidatedPersistStorage } from "@/storage/validated-persist-stora
 import {
   createSidebarFolder,
   EMPTY_SIDEBAR_FOLDERS,
+  landNewSidebarProjects,
   mergePersistedSidebarFolders,
+  moveLooseSidebarProjectsToFolder,
   moveSidebarProjectToFolder,
   NO_FOLDS_UNDER_FILTER,
   PersistedSidebarFoldersSchema,
   removeSidebarFolder,
   renameSidebarFolder,
+  setSidebarLandingFolder,
   toggleSidebarFolderCollapsed,
   toggleSidebarFolderFoldUnderFilter,
+  type PersistedSidebarFolders,
   type SidebarFoldersState,
   type SidebarFoldsUnderFilter,
+  type SidebarLandingProject,
 } from "./state";
 
-export type { SidebarFolder, SidebarFoldersState, SidebarFoldsUnderFilter } from "./state";
-export { normalizeSidebarFolderName } from "./state";
+export type {
+  SidebarFolder,
+  SidebarFoldersState,
+  SidebarFoldsUnderFilter,
+  SidebarLandingProject,
+} from "./state";
+export { looseRepoKeys, normalizeSidebarFolderName } from "./state";
 
 interface SidebarFoldersStore extends SidebarFoldersState {
   /** Makes a folded folder holding `projectKey` and returns its id, or null for a blank name. */
@@ -28,6 +38,9 @@ interface SidebarFoldersStore extends SidebarFoldersState {
   renameFolder: (folderId: string, name: string) => void;
   removeFolder: (folderId: string) => void;
   toggleFolderCollapsed: (folderId: string) => void;
+  moveLooseProjectsToFolder: (folderId: string, projects: readonly SidebarLandingProject[]) => void;
+  setLandingFolder: (folderId: string | null, knownProjectKeys: readonly string[]) => void;
+  landNewProjects: (projects: readonly SidebarLandingProject[]) => void;
   /** Kept in memory only, never in `partialize`: see `SidebarFoldsUnderFilter`. */
   foldsUnderFilter: SidebarFoldsUnderFilter;
   toggleFolderFoldUnderFilter: (filterKey: string, folderId: string) => void;
@@ -47,7 +60,7 @@ function createFolderId(): string {
  * shows every project as before.
  */
 export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
-  persist<SidebarFoldersStore, [], [], SidebarFoldersState>(
+  persist<SidebarFoldersStore, [], [], PersistedSidebarFolders>(
     (set, get) => ({
       ...EMPTY_SIDEBAR_FOLDERS,
       createFolder: (name, projectKey) => {
@@ -63,6 +76,11 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
       removeFolder: (folderId) => set((state) => removeSidebarFolder(state, folderId)),
       toggleFolderCollapsed: (folderId) =>
         set((state) => toggleSidebarFolderCollapsed(state, folderId)),
+      moveLooseProjectsToFolder: (folderId, projects) =>
+        set((state) => moveLooseSidebarProjectsToFolder(state, folderId, projects)),
+      setLandingFolder: (folderId, knownProjectKeys) =>
+        set((state) => setSidebarLandingFolder(state, folderId, knownProjectKeys)),
+      landNewProjects: (projects) => set((state) => landNewSidebarProjects(state, projects)),
       foldsUnderFilter: NO_FOLDS_UNDER_FILTER,
       toggleFolderFoldUnderFilter: (filterKey, folderId) =>
         set((state) => ({
@@ -79,6 +97,8 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
       partialize: (state) => ({
         folders: state.folders,
         folderIdByProjectKey: state.folderIdByProjectKey,
+        landingFolderId: state.landingFolderId,
+        knownProjectKeys: state.knownProjectKeys,
       }),
       merge: (persistedState, currentState) =>
         mergePersistedSidebarFolders(persistedState, currentState),

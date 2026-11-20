@@ -16,9 +16,14 @@ export interface SidebarFolder {
 export interface SidebarFoldersState {
   folders: SidebarFolder[];
   folderIdByProjectKey: Record<string, string>;
+  /** The folder new projects go into by themselves, or null (see `landNewSidebarProjects`). */
+  landingFolderId: string | null;
+  /** The projects known while a landing folder is set: a project not among them is new. */
+  knownProjectKeys: string[];
 }
 
-export const PersistedSidebarFoldersSchema: z.ZodType<SidebarFoldersState> = z.strictObject({
+/** The two landing fields are optional, so what an older build stored still reads back. */
+export const PersistedSidebarFoldersSchema = z.strictObject({
   folders: z.array(
     z.strictObject({
       id: z.string(),
@@ -27,12 +32,24 @@ export const PersistedSidebarFoldersSchema: z.ZodType<SidebarFoldersState> = z.s
     }),
   ),
   folderIdByProjectKey: z.record(z.string(), z.string()),
+  landingFolderId: z.string().nullable().optional(),
+  knownProjectKeys: z.array(z.string()).optional(),
 });
+
+export type PersistedSidebarFolders = z.infer<typeof PersistedSidebarFoldersSchema>;
 
 export const EMPTY_SIDEBAR_FOLDERS: SidebarFoldersState = {
   folders: [],
   folderIdByProjectKey: {},
+  landingFolderId: null,
+  knownProjectKeys: [],
 };
+
+/** What the landing rules need of a project: a repo goes in, a plain folder stays out. */
+export interface SidebarLandingProject {
+  viewKey: string;
+  projectKind: string;
+}
 
 export function normalizeSidebarFolderName(name: string): string {
   return name.trim().replace(/\s+/g, " ");
@@ -74,7 +91,78 @@ export function moveSidebarProjectToFolder(
   } else {
     folderIdByProjectKey[projectKey] = folderId;
   }
-  return dropEmptyFolders({ folders: state.folders, folderIdByProjectKey });
+  return dropEmptyFolders({ ...state, folderIdByProjectKey });
+}
+
+/**
+ * Puts every project that is in no folder into `folderId`, the repos only: a plain folder (a
+ * project of kind `non_git` or `directory`, such as a chats folder) stays where it is, since the
+ * folder is for the worker repos and the plain ones are where the chats live (ALM-5108).
+ */
+export function moveLooseSidebarProjectsToFolder(
+  state: SidebarFoldersState,
+  folderId: string,
+  projects: readonly SidebarLandingProject[],
+): SidebarFoldersState {
+  if (!state.folders.some((folder) => folder.id === folderId)) return state;
+  const moving = looseRepoKeys(state, projects);
+  if (moving.length === 0) return state;
+  const folderIdByProjectKey = { ...state.folderIdByProjectKey };
+  for (const key of moving) folderIdByProjectKey[key] = folderId;
+  return { ...state, folderIdByProjectKey };
+}
+
+/** The keys of the repos in `projects` that are in no folder, in the order given. */
+export function looseRepoKeys(
+  state: SidebarFoldersState,
+  projects: readonly SidebarLandingProject[],
+): string[] {
+  const folderIds = new Set(state.folders.map((folder) => folder.id));
+  return projects
+    .filter((project) => project.projectKind === "git")
+    .filter((project) => !folderIds.has(state.folderIdByProjectKey[project.viewKey] ?? ""))
+    .map((project) => project.viewKey);
+}
+
+/**
+ * Makes `folderId` the folder new projects land in, or none with `null`; one folder at a time.
+ * Every project known now (`knownProjectKeys`: those listed, those in the project order, those
+ * in a folder) counts as old, so only a project that appears later lands (ALM-5108).
+ */
+export function setSidebarLandingFolder(
+  state: SidebarFoldersState,
+  folderId: string | null,
+  knownProjectKeys: readonly string[],
+): SidebarFoldersState {
+  if (folderId === null) {
+    return state.landingFolderId === null
+      ? state
+      : { ...state, landingFolderId: null, knownProjectKeys: [] };
+  }
+  if (!state.folders.some((folder) => folder.id === folderId)) return state;
+  const known = new Set([...knownProjectKeys, ...Object.keys(state.folderIdByProjectKey)]);
+  return { ...state, landingFolderId: folderId, knownProjectKeys: [...known] };
+}
+
+/**
+ * Lands the projects that are new since the landing folder was set: a repo goes into that
+ * folder, a plain folder stays loose (see `moveLooseSidebarProjectsToFolder`), and both are
+ * known from then on, so a project taken out of the folder stays out. With no landing folder,
+ * or nothing new, the state is returned as it was (ALM-5108).
+ */
+export function landNewSidebarProjects(
+  state: SidebarFoldersState,
+  projects: readonly SidebarLandingProject[],
+): SidebarFoldersState {
+  const folderId = state.landingFolderId;
+  if (folderId === null || !state.folders.some((folder) => folder.id === folderId)) return state;
+  const known = new Set(state.knownProjectKeys);
+  const fresh = projects.filter((project) => !known.has(project.viewKey));
+  if (fresh.length === 0) return state;
+  const folderIdByProjectKey = { ...state.folderIdByProjectKey };
+  for (const key of looseRepoKeys(state, fresh)) folderIdByProjectKey[key] = folderId;
+  for (const project of fresh) known.add(project.viewKey);
+  return { ...state, folderIdByProjectKey, knownProjectKeys: [...known] };
 }
 
 export function renameSidebarFolder(
@@ -101,10 +189,11 @@ export function removeSidebarFolder(
   const folderIdByProjectKey = Object.fromEntries(
     Object.entries(state.folderIdByProjectKey).filter(([, id]) => id !== folderId),
   );
-  return {
+  return withLandingFolderInFolders({
+    ...state,
     folders: state.folders.filter((folder) => folder.id !== folderId),
     folderIdByProjectKey,
-  };
+  });
 }
 
 export function toggleSidebarFolderCollapsed(
@@ -148,7 +237,10 @@ export function toggleSidebarFolderFoldUnderFilter(
   };
 }
 
-/** A stored state read back: a project naming a folder that is gone is loose again. */
+/**
+ * A stored state read back: a project naming a folder that is gone is loose again, and a landing
+ * folder that is gone lands nothing. A state an older build stored has no landing folder.
+ */
 export function mergePersistedSidebarFolders<S extends SidebarFoldersState>(
   persistedValue: unknown,
   current: S,
@@ -159,11 +251,26 @@ export function mergePersistedSidebarFolders<S extends SidebarFoldersState>(
   const folderIdByProjectKey = Object.fromEntries(
     Object.entries(result.data.folderIdByProjectKey).filter(([, id]) => folderIds.has(id)),
   );
-  return { ...current, folders: result.data.folders, folderIdByProjectKey };
+  return withLandingFolderInFolders({
+    ...current,
+    folders: result.data.folders,
+    folderIdByProjectKey,
+    landingFolderId: result.data.landingFolderId ?? null,
+    knownProjectKeys: result.data.knownProjectKeys ?? [],
+  });
 }
 
-function dropEmptyFolders(state: SidebarFoldersState): SidebarFoldersState {
+function dropEmptyFolders<S extends SidebarFoldersState>(state: S): S {
   const used = new Set(Object.values(state.folderIdByProjectKey));
   const folders = state.folders.filter((folder) => used.has(folder.id));
-  return folders.length === state.folders.length ? state : { ...state, folders };
+  return folders.length === state.folders.length
+    ? state
+    : withLandingFolderInFolders({ ...state, folders });
+}
+
+/** A landing folder that went (removed, or emptied) takes its tick and its known projects along. */
+function withLandingFolderInFolders<S extends SidebarFoldersState>(state: S): S {
+  const id = state.landingFolderId;
+  if (id === null || state.folders.some((folder) => folder.id === id)) return state;
+  return { ...state, landingFolderId: null, knownProjectKeys: [] };
 }
