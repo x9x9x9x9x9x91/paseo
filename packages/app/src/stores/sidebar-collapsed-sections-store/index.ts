@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import {
   type CollapsedProjectsState,
@@ -44,3 +45,5 @@ export const useSidebarCollapsedSectionsStore = create<SidebarCollapsedSectionsS
     },
   ),
 );
+
+followOtherWindowsWrites(useSidebarCollapsedSectionsStore);
