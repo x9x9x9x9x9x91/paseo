@@ -1324,6 +1324,17 @@ export const ja: TranslationResources = {
         "新しいワークツリーが依存関係をインストールして自動的に準備できるようにセットアップコマンドを追加してください。",
       openProjectSettings: "プロジェクト設定を開く",
     },
+    folder: {
+      menu: "フォルダの操作",
+      moveTo: "フォルダへ移動",
+      takeOut: "フォルダから出す",
+      create: "新しいフォルダ…",
+      createConfirm: "フォルダを作成",
+      name: "フォルダ名",
+      rename: "フォルダ名を変更",
+      renameConfirm: "名前を変更",
+      remove: "フォルダを削除",
+    },
     project: {
       actions: {
         menu: "プロジェクトアクション",

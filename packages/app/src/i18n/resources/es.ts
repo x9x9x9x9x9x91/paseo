@@ -1346,6 +1346,17 @@ export const es: TranslationResources = {
         "Agregue comandos de configuración para que los nuevos árboles de trabajo puedan instalar dependencias y prepararse automáticamente.",
       openProjectSettings: "Abrir la configuración del proyecto",
     },
+    folder: {
+      menu: "Acciones de la carpeta",
+      moveTo: "Mover a una carpeta",
+      takeOut: "Sacar de la carpeta",
+      create: "Nueva carpeta…",
+      createConfirm: "Crear carpeta",
+      name: "Nombre de la carpeta",
+      rename: "Renombrar carpeta",
+      renameConfirm: "Renombrar",
+      remove: "Quitar carpeta",
+    },
     project: {
       actions: {
         menu: "Acciones del proyecto",
