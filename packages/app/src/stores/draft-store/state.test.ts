@@ -4,6 +4,7 @@ import {
   pruneFinalizedDraftRecords,
   toDraftInputIfReady,
   editDraftRecordText,
+  mergeFollowedDraftState,
   type DraftRecord,
 } from "./state";
 
@@ -193,5 +194,54 @@ describe("draft-store normalization", () => {
       text: "Keep this prompt",
       attachments: [pickerAttachment],
     });
+  });
+});
+
+describe("draft-store across app windows", () => {
+  const record = (text: string, updatedAt: number): DraftRecord => ({
+    input: { text, attachments: [] },
+    lifecycle: "active",
+    updatedAt,
+    version: updatedAt,
+  });
+
+  it("takes in the drafts another window wrote or removed and keeps this window's others", () => {
+    const own = record("only in this window", 3);
+    const local = {
+      drafts: { own, removedThere: record("removed in A", 1), editedThere: record("old", 1) },
+      createModalDraft: null,
+    };
+    const before = {
+      drafts: { removedThere: record("removed in A", 1), editedThere: record("old", 1) },
+      createModalDraft: null,
+    };
+    const stored = {
+      drafts: { editedThere: record("new from A", 2), newThere: record("typed in A", 2) },
+      createModalDraft: record("modal in A", 2),
+    };
+
+    const merged = mergeFollowedDraftState({ before, stored, local });
+
+    expect(Object.keys(merged.drafts).sort()).toEqual(["editedThere", "newThere", "own"]);
+    expect(merged.drafts.own).toBe(own);
+    expect(merged.drafts.editedThere.input.text).toBe("new from A");
+    expect(merged.createModalDraft?.input.text).toBe("modal in A");
+  });
+
+  it("keeps this window's later edit of a draft the other window wrote or removed", () => {
+    const later = record("typed here, not stored yet", 5);
+    const laterModal = record("modal typed here", 5);
+    const merged = mergeFollowedDraftState({
+      before: {
+        drafts: { both: record("start", 1), removedThere: record("start", 1) },
+        createModalDraft: record("start", 1),
+      },
+      stored: { drafts: { both: record("from A", 3) }, createModalDraft: null },
+      local: { drafts: { both: later, removedThere: later }, createModalDraft: laterModal },
+    });
+
+    expect(merged.drafts.both).toBe(later);
+    expect(merged.drafts.removedThere).toBe(later);
+    expect(merged.createModalDraft).toBe(laterModal);
   });
 });
