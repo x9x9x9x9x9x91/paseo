@@ -22,6 +22,29 @@ export function hostSupportsFeature(
   return serverInfo?.features?.[feature] === true;
 }
 
+/**
+ * Whether a host has a feature: `null` while it has sent no server info (never connected in this
+ * app run), so an offline host reads as not connected rather than as one too old for the feature;
+ * an "update the host" message is only for `false` (ALM-5046).
+ */
+export function hostFeatureAvailability(
+  serverInfo: DaemonServerInfo | null | undefined,
+  feature: HostFeatureName,
+): boolean | null {
+  return serverInfo ? hostSupportsFeature(serverInfo, feature) : null;
+}
+
+/**
+ * Whether no host is known to lack the feature: a host with no server info yet (`null`) is left
+ * out, so one offline host does not turn a feature off for every host (ALM-5046).
+ */
+export function noHostLacksFeature(availability: Iterable<boolean | null>): boolean {
+  for (const supported of availability) {
+    if (supported === false) return false;
+  }
+  return true;
+}
+
 export function selectHostFeature(
   state: HostFeatureSessionState,
   serverId: string,
@@ -38,15 +61,23 @@ export function useHostFeature(
   return useSessionStore((state) => selectHostFeature(state, normalizedServerId, feature));
 }
 
+export function selectHostFeatureAvailability(
+  state: HostFeatureSessionState,
+  serverId: string,
+  feature: HostFeatureName,
+): boolean | null {
+  return hostFeatureAvailability(state.sessions[serverId]?.serverInfo, feature);
+}
+
+/** One host's `hostFeatureAvailability`: `null` until it has sent server info. */
 export function useHostFeatureAvailability(
   serverId: string | null | undefined,
   feature: HostFeatureName,
 ): boolean | null {
   const normalizedServerId = serverId?.trim() ?? "";
-  return useSessionStore((state) => {
-    const serverInfo = state.sessions[normalizedServerId]?.serverInfo;
-    return serverInfo ? hostSupportsFeature(serverInfo, feature) : null;
-  });
+  return useSessionStore((state) =>
+    selectHostFeatureAvailability(state, normalizedServerId, feature),
+  );
 }
 
 export function useHostFeatureMap(
@@ -69,10 +100,7 @@ export function useHostFeatureAvailabilityMap(
 ): ReadonlyMap<string, boolean | null> {
   const flags = useSessionStore(
     useShallow((state) =>
-      serverIds.map((serverId) => {
-        const serverInfo = state.sessions[serverId]?.serverInfo;
-        return serverInfo ? hostSupportsFeature(serverInfo, feature) : null;
-      }),
+      serverIds.map((serverId) => selectHostFeatureAvailability(state, serverId, feature)),
     ),
   );
 
