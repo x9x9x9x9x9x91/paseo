@@ -266,18 +266,24 @@ export function AnchoredSurface({
 
   // The surface is placed once both measurements land. Until then it sits off-screen so it can
   // be measured, and it must not animate: an entering animation that ran there would be over
-  // before anyone saw the menu. Remounting on placement starts the native animation from the
-  // final position; web starts its own animation on placement.
+  // before anyone saw the menu. Native remounts the surface on placement, which starts its
+  // Reanimated animation from the final position. Web starts its own animation on placement and
+  // keeps the surface mounted, so a page's state set while it was measured, such as a name typed
+  // into its field, survives (ALM-5057).
   const placed = position !== null;
+  const surfaceKey = !isWeb && !placed ? "measuring" : "placed";
 
   useWebContentEntering({ placed, surfaceNativeID });
 
+  // Placement focuses the first enabled row, unless focus already sits inside the surface: a
+  // page's autofocused field, such as a folder's Rename name, keeps it (ALM-5057).
   useEffect(() => {
     if (!isWeb || !open || !placed || typeof document === "undefined") return undefined;
     const frame = requestAnimationFrame(() => {
-      document
-        .getElementById(surfaceNativeID)
-        ?.querySelector<HTMLElement>('[data-menu-item="true"]:not([data-menu-disabled="true"])')
+      const surface = document.getElementById(surfaceNativeID);
+      if (!surface || surface.contains(document.activeElement)) return;
+      surface
+        .querySelector<HTMLElement>('[data-menu-item="true"]:not([data-menu-disabled="true"])')
         ?.focus();
     });
     return () => cancelAnimationFrame(frame);
@@ -347,7 +353,7 @@ export function AnchoredSurface({
       ) : null}
       <View pointerEvents="box-none" style={frame.holder}>
         <FloatingSurface
-          key={placed ? "placed" : "measuring"}
+          key={surfaceKey}
           collapsable={false}
           tabIndex={-1}
           nativeID={surfaceNativeID}

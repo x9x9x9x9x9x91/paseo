@@ -3,7 +3,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { Text, View } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { MenuItem, MenuRoot, MenuSurface, MenuTextField, MenuTrigger, type Size } from "./index";
+import {
+  MenuItem,
+  MenuRoot,
+  MenuSubTrigger,
+  MenuSurface,
+  MenuTextField,
+  MenuTrigger,
+  type MenuPageDefinition,
+  type Size,
+} from "./index";
 
 // App sources compile against the classic JSX runtime, which expects React on the global.
 beforeEach(() => vi.stubGlobal("React", React));
@@ -70,7 +79,9 @@ function GrowsAfterOpen({ afterMs, from, to }: { afterMs: number; from: Size; to
   return <View testID="body" style={grown ? to : from} />;
 }
 
-function mountMenuAbovePill(body: ReactNode): void {
+function noop(): void {}
+
+function mountMenuAbovePill(body: ReactNode, pages?: readonly MenuPageDefinition[]): void {
   mount(
     <View style={PILL_POSITION}>
       <MenuRoot>
@@ -84,6 +95,7 @@ function mountMenuAbovePill(body: ReactNode): void {
           minWidth={280}
           maxWidth={620}
           testID="panel"
+          pages={pages}
         >
           {body}
         </MenuSurface>
@@ -91,6 +103,16 @@ function mountMenuAbovePill(body: ReactNode): void {
     </View>,
   );
   act(() => element("pill").click());
+}
+
+let mounts = 0;
+
+/** Counts its own mounts, the way a page's typed name lives and dies with its component. */
+function CountsMounts() {
+  useEffect(() => {
+    mounts += 1;
+  }, []);
+  return <View testID="body" style={SHORT} />;
 }
 
 describe("anchored menu surface on web", () => {
@@ -121,9 +143,57 @@ describe("anchored menu surface on web", () => {
     const panel = element("panel").getBoundingClientRect();
     expect(panel.width).toBeGreaterThanOrEqual(body.width);
   });
-});
 
-function noop(): void {}
+  // A page measured off-screen and then placed keeps its state, such as a name typed into its
+  // field in between (ALM-5057).
+  it("keeps its content mounted from measuring to placed", async () => {
+    mounts = 0;
+    mountMenuAbovePill(<CountsMounts />);
+
+    await wait(SETTLE_MS);
+
+    const pill = element("pill").getBoundingClientRect();
+    const panel = element("panel").getBoundingClientRect();
+    expect(panel.bottom).toBeLessThanOrEqual(pill.top);
+    expect(mounts).toBe(1);
+  });
+
+  // A sub page whose field took focus as it mounted keeps it once placed, rather than handing it
+  // to the page's first enabled row, as on a folder's Rename page (ALM-5057).
+  it("leaves focus in a sub page's autofocused field once placed", async () => {
+    const renamePage: MenuPageDefinition = {
+      id: "rename",
+      title: "Rename",
+      hoverIntent: false,
+      content: (
+        <>
+          <MenuTextField
+            initialValue="Workers"
+            onChangeText={noop}
+            placeholder="Name"
+            autoFocus
+            testID="field"
+          />
+          <MenuItem onSelect={noop} testID="confirm">
+            Rename
+          </MenuItem>
+        </>
+      ),
+    };
+    mountMenuAbovePill(
+      <MenuSubTrigger id="rename" testID="open-rename">
+        Rename
+      </MenuSubTrigger>,
+      [renamePage],
+    );
+    await wait(SETTLE_MS);
+
+    act(() => element("open-rename").click());
+    await wait(SETTLE_MS);
+
+    expect(document.activeElement).toBe(element("field"));
+  });
+});
 
 describe("menu text field keys on web", () => {
   beforeEach(async () => {
