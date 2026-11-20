@@ -102,7 +102,11 @@ const plain = (viewKey: string) => ({ viewKey, projectKind: "non_git" });
 
 describe("filling a folder and landing new projects (ALM-5108)", () => {
   it("moves every loose repo into the folder and leaves plain folders and other folders' alone", () => {
-    let state = createSidebarFolder(withWorkers(), { id: "music", name: "Music", projectKey: "night" });
+    let state = createSidebarFolder(withWorkers(), {
+      id: "music",
+      name: "Music",
+      projectKey: "night",
+    });
     state = moveLooseSidebarProjectsToFolder(state, "workers", [
       plain("0sin-chats"),
       repo("alma"),
