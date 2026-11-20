@@ -19,6 +19,8 @@ import {
   type SidebarShortcutModel,
   type SidebarShortcutSection,
 } from "@/utils/sidebar-shortcuts";
+import type { SidebarFolder } from "@/stores/sidebar-folders-store";
+import { buildSidebarProjectListItems, projectKeysInCollapsedFolders } from "./sidebar-folders";
 import { statusWorkspaceGroups, type SidebarWorkspaceGroup } from "./sidebar-labels";
 
 export interface SidebarProjection {
@@ -46,6 +48,9 @@ export interface SidebarProjectionInput {
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
+  /** Project mode's folders: the shortcuts walk the projects in the order the folders show them. */
+  folders?: readonly SidebarFolder[];
+  folderIdByProjectKey?: Readonly<Record<string, string>>;
   t: TFunction;
 }
 
@@ -69,11 +74,23 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
     sections.push({ workspaces: pinnedGroups.pinnedChats });
   }
   if (input.groupMode === "project") {
+    // A folded folder hides its projects' workspaces as a folded project does, so the shortcuts
+    // skip them; an open one lists its projects where the folder stands (ALM-5044).
+    const listItems = buildSidebarProjectListItems({
+      projects: pinnedGroups.unpinnedProjects,
+      folders: input.folders ?? [],
+      folderIdByProjectKey: input.folderIdByProjectKey ?? {},
+    });
+    const inCollapsedFolder = projectKeysInCollapsedFolders(listItems);
     sections.push(
-      ...pinnedGroups.unpinnedProjects.map((project) => ({
-        workspaces: project.workspaces,
-        collapsed: input.collapsedProjectKeys.has(project.viewKey),
-      })),
+      ...listItems
+        .flatMap((item) => (item.kind === "project" ? [item.project] : item.projects))
+        .map((project) => ({
+          workspaces: project.workspaces,
+          collapsed:
+            input.collapsedProjectKeys.has(project.viewKey) ||
+            inCollapsedFolder.has(project.viewKey),
+        })),
     );
   } else {
     sections.push(

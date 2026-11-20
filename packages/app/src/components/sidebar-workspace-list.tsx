@@ -39,7 +39,17 @@ import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop
 import { type GestureType } from "react-native-gesture-handler";
 import { useSidebarWorkspaceRename } from "@/workspace-rename";
 import { useWorkspaceClipboardActions } from "@/hooks/use-workspace-clipboard-actions";
-import { ExternalLink, Settings, MoreVertical, Plus, Trash2 } from "lucide-react-native";
+import {
+  ExternalLink,
+  Folder,
+  FolderInput,
+  FolderOpen,
+  Pencil,
+  Settings,
+  MoreVertical,
+  Plus,
+  Trash2,
+} from "lucide-react-native";
 import { NestableScrollContainer } from "react-native-draggable-flatlist";
 import { DraggableList, type DraggableRenderItemInfo } from "./draggable-list";
 import type { DraggableListDragHandleProps } from "./draggable-list.types";
@@ -84,7 +94,26 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  FOLDER_RENAME_PAGE_ID,
+  PROJECT_FOLDER_PAGE_ID,
+  SidebarFolderActionsProvider,
+  useFolderMenuPages,
+  useProjectFolderMenuPages,
+  useSidebarFolderActions,
+  type SidebarFolderActions,
+} from "@/components/sidebar/sidebar-folder-menu";
+import {
+  buildSidebarProjectListItems,
+  foldersOfListItems,
+  projectKeysOfListItems,
+  projectKeysWithFolderReordered,
+  projectKeysWithProjectInFolder,
+  type SidebarProjectListItem,
+} from "@/components/sidebar/sidebar-folders";
+import { useSidebarFoldersStore, type SidebarFolder } from "@/stores/sidebar-folders-store";
 import { ProjectLeadingVisual } from "@/components/sidebar/project-leading-visual";
 import { useToast } from "@/contexts/toast-context";
 import { SidebarToastClearance } from "@/components/sidebar/sidebar-toast-region";
@@ -161,6 +190,8 @@ const workspaceKeyExtractor = (workspace: SidebarWorkspacePlacement) => workspac
 
 const projectViewKeyExtractor = (project: SidebarProjectEntry) => project.viewKey;
 
+const projectListItemKeyExtractor = (item: SidebarProjectListItem<SidebarProjectEntry>) => item.key;
+
 const WORKSPACE_STATUS_DOT_WIDTH = 14;
 const ThemedExternalLink = withUnistyles(ExternalLink);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -168,6 +199,10 @@ const ThemedPlus = withUnistyles(Plus);
 const ThemedMoreVertical = withUnistyles(MoreVertical);
 const ThemedTrash2 = withUnistyles(Trash2);
 const ThemedSettings = withUnistyles(Settings);
+const ThemedFolder = withUnistyles(Folder);
+const ThemedFolderOpen = withUnistyles(FolderOpen);
+const ThemedFolderInput = withUnistyles(FolderInput);
+const ThemedPencil = withUnistyles(Pencil);
 
 const foregroundColorMapping = (theme: Theme) => ({
   color: theme.colors.foreground,
@@ -459,6 +494,10 @@ function ProjectRowTrailingActions({
 }
 
 const trash2LeadingIcon = <ThemedTrash2 size={14} uniProps={foregroundMutedColorMapping} />;
+const moveToFolderLeadingIcon = (
+  <ThemedFolderInput size={14} uniProps={foregroundMutedColorMapping} />
+);
+const renameFolderLeadingIcon = <ThemedPencil size={14} uniProps={foregroundMutedColorMapping} />;
 const settingsLeadingIcon = <ThemedSettings size={14} uniProps={foregroundMutedColorMapping} />;
 const openInNewWindowLeadingIcon = (
   <ThemedExternalLink size={14} uniProps={foregroundMutedColorMapping} />
@@ -487,6 +526,7 @@ function ProjectKebabMenu({
   removeProjectStatus: "idle" | "pending" | "success";
 }) {
   const { t } = useTranslation();
+  const folderPages = useProjectFolderMenuPages(projectViewKey);
   return (
     <DropdownMenu compactMode="sheet">
       <DropdownMenuTrigger
@@ -498,7 +538,12 @@ function ProjectKebabMenu({
       >
         {renderKebabTriggerIcon}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" width={220} sheetTitle={t("sidebar.project.actions.menu")}>
+      <DropdownMenuContent
+        align="end"
+        width={220}
+        pages={folderPages}
+        sheetTitle={t("sidebar.project.actions.menu")}
+      >
         <ProjectMenuItems
           surface="dropdown"
           projectViewKey={projectViewKey}
@@ -544,6 +589,7 @@ function ProjectMenuItems({
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const folderActions = useSidebarFolderActions();
   const handleOpenProjectSettings = useCallback(() => {
     if (!settingsTarget) return;
     router.navigate(buildProjectSettingsRoute(settingsTarget.serverId, settingsTarget.projectId));
@@ -587,6 +633,15 @@ function ProjectMenuItems({
         path={projectPath}
         testID={`sidebar-project-menu-open-folder-${projectViewKey}`}
       />
+      {folderActions ? (
+        <DropdownMenuSubTrigger
+          id={PROJECT_FOLDER_PAGE_ID}
+          leading={moveToFolderLeadingIcon}
+          testID={`sidebar-project-menu-folder-${projectViewKey}`}
+        >
+          {t("sidebar.folder.moveTo")}
+        </DropdownMenuSubTrigger>
+      ) : null}
       <ProjectMenuItem
         surface={surface}
         testID={`sidebar-project-menu-remove-${projectViewKey}`}
@@ -886,6 +941,7 @@ function ProjectHeaderRow({
   const localDaemonServerId = useLocalDaemonServerId();
   const projectPath = resolveSidebarProjectLocalPath(project, localDaemonServerId);
   const settingsTarget = project.hosts[0] ?? null;
+  const folderPages = useProjectFolderMenuPages(project.viewKey);
   const handleBeginWorkspaceSetup = useCallback(() => {
     if (!worktreeTarget) {
       return;
@@ -1032,6 +1088,7 @@ function ProjectHeaderRow({
       <ContextMenuContent
         align="start"
         width={220}
+        pages={folderPages}
         testID={`sidebar-project-context-menu-${project.viewKey}`}
       >
         <ProjectMenuItems
@@ -1042,6 +1099,192 @@ function ProjectHeaderRow({
           onRemoveProject={onRemoveProject}
           removeProjectStatus={removeProjectStatus}
         />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+const folderClosedLeadingIcon = <ThemedFolder size={16} uniProps={foregroundMutedColorMapping} />;
+const folderOpenLeadingIcon = <ThemedFolderOpen size={16} uniProps={foregroundMutedColorMapping} />;
+
+function FolderMenuItems({
+  surface,
+  folder,
+  onRemove,
+}: {
+  surface: ProjectMenuSurface;
+  folder: SidebarFolder;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <DropdownMenuSubTrigger
+        id={FOLDER_RENAME_PAGE_ID}
+        leading={renameFolderLeadingIcon}
+        testID={`sidebar-folder-menu-rename-${folder.id}`}
+      >
+        {t("sidebar.folder.rename")}
+      </DropdownMenuSubTrigger>
+      <ProjectMenuItem
+        surface={surface}
+        testID={`sidebar-folder-menu-remove-${folder.id}`}
+        leading={trash2LeadingIcon}
+        onSelect={onRemove}
+      >
+        {t("sidebar.folder.remove")}
+      </ProjectMenuItem>
+    </>
+  );
+}
+
+function FolderKebabMenu({
+  folder,
+  pages,
+  onRemove,
+}: {
+  folder: SidebarFolder;
+  pages: ComponentProps<typeof DropdownMenuContent>["pages"];
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <DropdownMenu compactMode="sheet">
+      <DropdownMenuTrigger
+        hitSlop={8}
+        style={projectKebabStyle}
+        accessibilityRole={platformIsWeb ? undefined : "button"}
+        accessibilityLabel={t("sidebar.folder.menu")}
+        testID={`sidebar-folder-kebab-${folder.id}`}
+      >
+        {renderKebabTriggerIcon}
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        width={220}
+        pages={pages}
+        sheetTitle={t("sidebar.folder.menu")}
+      >
+        <FolderMenuItems surface="dropdown" folder={folder} onRemove={onRemove} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * A folder's row: its icon, its name, and its fold. A folded folder shows no status of the
+ * projects inside it, since it holds the ones you do not visit (Tim's pick on ALM-5044).
+ * Right-click or the kebab renames or removes it; it drags like a project row.
+ */
+function FolderHeaderRow({
+  folder,
+  onToggleCollapsed,
+  onRename,
+  onRemove,
+  drag,
+  isDragging,
+  dragHandleProps,
+}: {
+  folder: SidebarFolder;
+  onToggleCollapsed: (folderId: string) => void;
+  onRename: (folderId: string, name: string) => void;
+  onRemove: (folderId: string) => void;
+  drag: () => void;
+  isDragging: boolean;
+  dragHandleProps?: DraggableListDragHandleProps;
+}) {
+  const [isHovered, setIsHovered] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const isMobileBreakpoint = useIsCompactFormFactor();
+  const interaction = useLongPressDragInteraction({ drag, menuController: null });
+  const {
+    role: _dragRole,
+    tabIndex: _dragTabIndex,
+    "aria-roledescription": _dragRoleDescription,
+    ...dragAttributes
+  } = dragHandleProps?.attributes ?? {};
+  const handleRename = useCallback(
+    (name: string) => onRename(folder.id, name),
+    [folder.id, onRename],
+  );
+  const handleRemove = useCallback(() => onRemove(folder.id), [folder.id, onRemove]);
+  const pages = useFolderMenuPages(folder, handleRename);
+
+  const handlePress = useCallback(() => {
+    if (interaction.didLongPressRef.current) {
+      interaction.didLongPressRef.current = false;
+      return;
+    }
+    onToggleCollapsed(folder.id);
+  }, [folder.id, interaction.didLongPressRef, onToggleCollapsed]);
+  const handlePointerEnter = useCallback(() => {
+    if (!contextMenuOpen) setIsHovered(true);
+  }, [contextMenuOpen]);
+  const handlePointerLeave = useCallback(() => setIsHovered(false), []);
+  const handleContextMenuOpenChange = useCallback((open: boolean) => {
+    setContextMenuOpen(open);
+    if (open) setIsHovered(false);
+  }, []);
+
+  const rowStyle = useMemo(
+    () => [
+      styles.projectRow,
+      isDragging && styles.projectRowDragging,
+      isHovered && styles.projectRowHovered,
+    ],
+    [isDragging, isHovered],
+  );
+  const actionsVisible = isHovered || platformIsNative || isMobileBreakpoint;
+  const accessibilityState = useMemo(() => ({ expanded: !folder.collapsed }), [folder.collapsed]);
+
+  return (
+    <ContextMenu open={contextMenuOpen} onOpenChange={handleContextMenuOpenChange}>
+      <View
+        {...dragAttributes}
+        {...dragHandleProps?.listeners}
+        ref={dragHandleProps?.setActivatorNodeRef as unknown as Ref<View>}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
+      >
+        <ContextMenuTrigger
+          enabledOnMobile={false}
+          accessibilityRole="button"
+          accessibilityState={accessibilityState}
+          style={rowStyle}
+          highlightStyle={styles.projectRowPressed}
+          onPressIn={interaction.handlePressIn}
+          onTouchMove={interaction.handleTouchMove}
+          onPressOut={interaction.handlePressOut}
+          onPress={handlePress}
+          testID={`sidebar-folder-row-${folder.id}`}
+        >
+          <View style={styles.projectRowLeft}>
+            <View style={styles.folderIconSlot}>
+              {folder.collapsed ? folderClosedLeadingIcon : folderOpenLeadingIcon}
+            </View>
+            <View style={styles.projectTitleGroup}>
+              <Text style={styles.projectTitle} numberOfLines={1}>
+                {folder.name}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.projectTrailingActions}>
+            <View
+              style={!actionsVisible && styles.projectKebabButtonHidden}
+              pointerEvents={actionsVisible ? "auto" : "none"}
+            >
+              <FolderKebabMenu folder={folder} pages={pages} onRemove={handleRemove} />
+            </View>
+          </View>
+        </ContextMenuTrigger>
+      </View>
+      <ContextMenuContent
+        align="start"
+        width={220}
+        pages={pages}
+        testID={`sidebar-folder-context-menu-${folder.id}`}
+      >
+        <FolderMenuItems surface="context" folder={folder} onRemove={handleRemove} />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -2113,6 +2356,81 @@ function SidebarGroupedModeList({
   );
 }
 
+/**
+ * A folder and, when it is open, its projects, which drag among themselves inside it. The folder
+ * row drags like a project row and carries its projects with it.
+ */
+function FolderBlock({
+  folder,
+  projects,
+  renderProject,
+  onProjectsReorder,
+  onToggleCollapsed,
+  onRename,
+  onRemove,
+  drag,
+  isDragging,
+  dragHandleProps,
+  activeWorkspaceSelection,
+  parentGestureRef,
+  dragGestureHostActive,
+}: {
+  folder: SidebarFolder;
+  projects: SidebarProjectEntry[];
+  renderProject: (info: DraggableRenderItemInfo<SidebarProjectEntry>) => ReactElement;
+  onProjectsReorder: (folderId: string, projects: SidebarProjectEntry[]) => void;
+  onToggleCollapsed: (folderId: string) => void;
+  onRename: (folderId: string, name: string) => void;
+  onRemove: (folderId: string) => void;
+  drag: () => void;
+  isDragging: boolean;
+  dragHandleProps?: DraggableListDragHandleProps;
+  activeWorkspaceSelection: ActiveWorkspaceSelection | null;
+  parentGestureRef?: MutableRefObject<GestureType | undefined>;
+  dragGestureHostActive?: boolean;
+}) {
+  const handleDragEnd = useCallback(
+    (reordered: SidebarProjectEntry[]) => onProjectsReorder(folder.id, reordered),
+    [folder.id, onProjectsReorder],
+  );
+  return (
+    <View
+      role="group"
+      accessibilityLabel={folder.name}
+      style={folder.collapsed ? undefined : styles.folderBlockExpanded}
+      testID={`sidebar-folder-${folder.id}`}
+    >
+      <FolderHeaderRow
+        folder={folder}
+        onToggleCollapsed={onToggleCollapsed}
+        onRename={onRename}
+        onRemove={onRemove}
+        drag={drag}
+        isDragging={isDragging}
+        dragHandleProps={dragHandleProps}
+      />
+      {folder.collapsed ? null : (
+        <View style={styles.folderMembers}>
+          <DraggableList
+            testID={`sidebar-folder-projects-${folder.id}`}
+            data={projects}
+            keyExtractor={projectViewKeyExtractor}
+            renderItem={renderProject}
+            onDragEnd={handleDragEnd}
+            extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+            scrollEnabled={false}
+            useDragHandle
+            nestable={platformIsNative}
+            simultaneousGestureRef={parentGestureRef}
+            gestureHostPresented={dragGestureHostActive}
+            containerStyle={styles.projectListContainer}
+          />
+        </View>
+      )}
+    </View>
+  );
+}
+
 function ProjectModeList({
   projects,
   pinnedGroups,
@@ -2264,9 +2582,8 @@ function ProjectModeList({
     });
   }, [creatingWorkspaceIds, projects]);
 
-  const handleProjectDragEnd = useCallback(
-    (reorderedProjects: SidebarProjectEntry[]) => {
-      const reorderedProjectKeys = reorderedProjects.map((project) => project.viewKey);
+  const applyVisibleProjectOrder = useCallback(
+    (reorderedProjectKeys: string[]) => {
       const currentProjectOrder = getProjectOrder();
       if (
         !hasVisibleOrderChanged({
@@ -2285,6 +2602,92 @@ function ProjectModeList({
       );
     },
     [getProjectOrder, setProjectOrder],
+  );
+
+  // Folders sit one level above projects (ALM-5044). The list shows each folder where its first
+  // project stands in the project order, so every move below is a project order: a dragged
+  // folder carries its projects, and a project put in a folder joins it at its end.
+  const folders = useSidebarFoldersStore((state) => state.folders);
+  const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
+  const createFolder = useSidebarFoldersStore((state) => state.createFolder);
+  const moveProjectToFolderInStore = useSidebarFoldersStore((state) => state.moveProjectToFolder);
+  const renameFolder = useSidebarFoldersStore((state) => state.renameFolder);
+  const removeFolder = useSidebarFoldersStore((state) => state.removeFolder);
+  const toggleFolderCollapsed = useSidebarFoldersStore((state) => state.toggleFolderCollapsed);
+  const projectListItems = useMemo(
+    () =>
+      buildSidebarProjectListItems({
+        projects: unpinnedProjects,
+        folders,
+        folderIdByProjectKey,
+      }),
+    [folderIdByProjectKey, folders, unpinnedProjects],
+  );
+
+  const handleProjectDragEnd = useCallback(
+    (reorderedItems: SidebarProjectListItem<SidebarProjectEntry>[]) => {
+      applyVisibleProjectOrder(projectKeysOfListItems(reorderedItems));
+    },
+    [applyVisibleProjectOrder],
+  );
+
+  const handleFolderProjectsReorder = useCallback(
+    (folderId: string, reorderedProjects: SidebarProjectEntry[]) => {
+      applyVisibleProjectOrder(
+        projectKeysWithFolderReordered(projectListItems, folderId, reorderedProjects),
+      );
+    },
+    [applyVisibleProjectOrder, projectListItems],
+  );
+
+  // The actions read the list at the moment of the click, so the context they ride in changes
+  // only when the folders a project can be moved into do, not with every status update that
+  // rebuilds the list (each project row reads it past MemoProjectBlock's equality).
+  const projectListItemsRef = useRef(projectListItems);
+  projectListItemsRef.current = projectListItems;
+  const folderIdByProjectKeyRef = useRef(folderIdByProjectKey);
+  folderIdByProjectKeyRef.current = folderIdByProjectKey;
+  const listedFolderIds = foldersOfListItems(projectListItems)
+    .map((folder) => folder.id)
+    .join("\n");
+  const pickerFolders = useMemo(() => {
+    const listed = new Set(listedFolderIds.split("\n"));
+    return folders.filter((folder) => listed.has(folder.id));
+  }, [folders, listedFolderIds]);
+
+  const handleRemoveFolder = useCallback(
+    (folderId: string) => {
+      // The folder's projects stay where it stood: its list order is made the project order
+      // first, so a member the order had elsewhere does not land there once it is loose.
+      applyVisibleProjectOrder(projectKeysOfListItems(projectListItemsRef.current));
+      removeFolder(folderId);
+    },
+    [applyVisibleProjectOrder, removeFolder],
+  );
+
+  const folderActions = useMemo<SidebarFolderActions>(
+    () => ({
+      folders: pickerFolders,
+      folderIdOf: (projectKey) => folderIdByProjectKeyRef.current[projectKey] ?? null,
+      moveProjectToFolder: (projectKey, folderId) => {
+        if ((folderIdByProjectKeyRef.current[projectKey] ?? null) === folderId) return;
+        if (folderId !== null) {
+          applyVisibleProjectOrder(
+            projectKeysWithProjectInFolder({
+              projectKeys: projectKeysOfListItems(projectListItemsRef.current),
+              folderIdByProjectKey: folderIdByProjectKeyRef.current,
+              projectKey,
+              folderId,
+            }),
+          );
+        }
+        moveProjectToFolderInStore(projectKey, folderId);
+      },
+      createFolderWithProject: (name, projectKey) => {
+        createFolder(name, projectKey);
+      },
+    }),
+    [applyVisibleProjectOrder, createFolder, moveProjectToFolderInStore, pickerFolders],
   );
 
   const handleWorkspaceReorder = useCallback(
@@ -2410,6 +2813,48 @@ function ProjectModeList({
     [renderProjectBlock],
   );
 
+  const renderProjectListItem = useCallback(
+    ({
+      item,
+      drag,
+      isActive,
+      dragHandleProps,
+    }: DraggableRenderItemInfo<SidebarProjectListItem<SidebarProjectEntry>>) => {
+      if (item.kind === "project") {
+        return renderProjectBlock(item.project, { drag, isDragging: isActive, dragHandleProps });
+      }
+      return (
+        <FolderBlock
+          key={item.key}
+          folder={item.folder}
+          projects={item.projects}
+          renderProject={renderProject}
+          onProjectsReorder={handleFolderProjectsReorder}
+          onToggleCollapsed={toggleFolderCollapsed}
+          onRename={renameFolder}
+          onRemove={handleRemoveFolder}
+          drag={drag}
+          isDragging={isActive}
+          dragHandleProps={dragHandleProps}
+          activeWorkspaceSelection={activeWorkspaceSelection}
+          parentGestureRef={parentGestureRef}
+          dragGestureHostActive={dragGestureHostActive}
+        />
+      );
+    },
+    [
+      activeWorkspaceSelection,
+      dragGestureHostActive,
+      handleFolderProjectsReorder,
+      handleRemoveFolder,
+      parentGestureRef,
+      renameFolder,
+      renderProject,
+      renderProjectBlock,
+      toggleFolderCollapsed,
+    ],
+  );
+
   const renderPinnedChatRow = useCallback(
     (
       workspace: SidebarWorkspacePlacement,
@@ -2479,9 +2924,9 @@ function ProjectModeList({
     ) : (
       <DraggableList
         testID="sidebar-project-list"
-        data={unpinnedProjects}
-        keyExtractor={projectViewKeyExtractor}
-        renderItem={renderProject}
+        data={projectListItems}
+        keyExtractor={projectListItemKeyExtractor}
+        renderItem={renderProjectListItem}
         onDragEnd={handleProjectDragEnd}
         extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
         scrollEnabled={false}
@@ -2550,28 +2995,30 @@ function ProjectModeList({
   );
 
   return (
-    <View style={styles.container}>
-      {platformIsNative ? (
-        <NestableScrollContainer
-          {...nativeScrollGestureProps}
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          testID="sidebar-project-workspace-list-scroll"
-        >
-          {content}
-        </NestableScrollContainer>
-      ) : (
-        <ScrollView
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          testID="sidebar-project-workspace-list-scroll"
-        >
-          {content}
-        </ScrollView>
-      )}
-    </View>
+    <SidebarFolderActionsProvider value={folderActions}>
+      <View style={styles.container}>
+        {platformIsNative ? (
+          <NestableScrollContainer
+            {...nativeScrollGestureProps}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+            testID="sidebar-project-workspace-list-scroll"
+          >
+            {content}
+          </NestableScrollContainer>
+        ) : (
+          <ScrollView
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+            testID="sidebar-project-workspace-list-scroll"
+          >
+            {content}
+          </ScrollView>
+        )}
+      </View>
+    </SidebarFolderActionsProvider>
   );
 }
 
@@ -2753,6 +3200,23 @@ const styles = StyleSheet.create((theme) => ({
   },
   projectKebabButtonHidden: {
     opacity: 0,
+  },
+  // The folder glyph stands in the slot a project's icon takes, so the folder's name starts on
+  // the same rail as every project name beside it.
+  folderIconSlot: {
+    width: densityIconBox("md"),
+    height: 20,
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  // A folder's projects step in once, so they read as inside it; padding keeps their hover fills
+  // the same box as the rows outside the folder.
+  folderMembers: {
+    paddingLeft: theme.spacing[3],
+  },
+  folderBlockExpanded: {
+    paddingBottom: theme.spacing[2],
   },
   projectKebabButtonHovered: {
     backgroundColor: theme.colors.surface2,
