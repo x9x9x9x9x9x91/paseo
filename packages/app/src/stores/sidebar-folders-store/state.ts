@@ -22,10 +22,13 @@ export interface SidebarFoldersState {
   knownProjectKeys: string[];
 }
 
-/** The two landing fields are optional, so what an older build stored still reads back. */
-export const PersistedSidebarFoldersSchema = z.strictObject({
+/**
+ * The stored state as the store reads it back. The landing fields are optional: a state from
+ * before ALM-5108 has none, and `createSidebarFoldersStorage` keeps them under a key of their own.
+ */
+export const PersistedSidebarFoldersSchema = z.object({
   folders: z.array(
-    z.strictObject({
+    z.object({
       id: z.string(),
       name: z.string(),
       collapsed: z.boolean(),
@@ -37,6 +40,12 @@ export const PersistedSidebarFoldersSchema = z.strictObject({
 });
 
 export type PersistedSidebarFolders = z.infer<typeof PersistedSidebarFoldersSchema>;
+
+/** The landing tick, stored apart from the folders (see `createSidebarFoldersStorage`). */
+export const StoredSidebarLandingSchema = z.object({
+  landingFolderId: z.string().nullable(),
+  knownProjectKeys: z.array(z.string()),
+});
 
 export const EMPTY_SIDEBAR_FOLDERS: SidebarFoldersState = {
   folders: [],
@@ -238,15 +247,11 @@ export function toggleSidebarFolderFoldUnderFilter(
   };
 }
 
-/**
- * What is stored: the folders, and the landing keys only while a folder is ticked, since an
- * older build's strict schema refuses them and its storage then drops every folder (ALM-5108).
- */
+/** What is stored; `createSidebarFoldersStorage` writes the landing keys apart (ALM-5127). */
 export function persistedSidebarFolders(state: SidebarFoldersState): PersistedSidebarFolders {
-  const stored = { folders: state.folders, folderIdByProjectKey: state.folderIdByProjectKey };
-  if (state.landingFolderId === null) return stored;
   return {
-    ...stored,
+    folders: state.folders,
+    folderIdByProjectKey: state.folderIdByProjectKey,
     landingFolderId: state.landingFolderId,
     knownProjectKeys: state.knownProjectKeys,
   };

@@ -75,7 +75,7 @@ const LegacyAttachmentMetadataSchema = AttachmentMetadataSchema.extend({
 });
 type PersistedImage = PersistedDraftImage | z.infer<typeof LegacyAttachmentMetadataSchema>;
 
-const RawDraftInputSchema = z.strictObject({
+const RawDraftInputSchema = z.object({
   text: z.string().optional(),
   attachments: z.array(PersistedComposerAttachmentSchema).optional(),
   images: z
@@ -86,19 +86,22 @@ const RawDraftInputSchema = z.strictObject({
   cwd: z.string().optional(),
 });
 const DraftLifecycleSchema = z.enum(["active", "abandoned", "sent"]);
-const NestedDraftRecordSchema = z.strictObject({
+const NestedDraftRecordSchema = z.object({
   input: RawDraftInputSchema,
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
 });
-const FlatDraftRecordSchema = RawDraftInputSchema.extend({
+// Only builds from before the nested `input` wrote a flat record. Strict, so a nested record that
+// fails its own schema is not read as an empty flat one (ALM-5127).
+const FlatDraftRecordSchema = z.strictObject({
+  ...RawDraftInputSchema.shape,
   lifecycle: DraftLifecycleSchema.optional(),
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
 });
 const PersistedDraftRecordSchema = z.union([NestedDraftRecordSchema, FlatDraftRecordSchema]);
-export const PersistedDraftStoreSchema = z.strictObject({
+export const PersistedDraftStoreSchema = z.object({
   drafts: z.record(z.string(), PersistedDraftRecordSchema).optional(),
   createModalDraft: PersistedDraftRecordSchema.nullable().optional(),
 });
