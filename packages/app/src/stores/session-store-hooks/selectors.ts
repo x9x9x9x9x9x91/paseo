@@ -15,6 +15,7 @@ export interface SessionsSnapshot {
     string,
     {
       hasHydratedWorkspaces?: boolean;
+      hasListedWorkspaces?: boolean;
       hasWorkspaceDirectorySnapshot?: boolean;
       workspaces: Map<string, WorkspaceDescriptor>;
       projects?: Map<string, ProjectDescriptor>;
@@ -135,6 +136,18 @@ export function selectHydratedWorkspaceServerIds(
   serverIds: readonly string[],
 ): string[] {
   return serverIds.filter((serverId) => state.sessions[serverId]?.hasHydratedWorkspaces === true);
+}
+
+/**
+ * The hosts whose projects a full listing has read. A project the app registers itself marks its
+ * host hydrated but not listed, so a host added to before its first listing is not read yet
+ * (ALM-5149).
+ */
+export function selectListedWorkspaceServerIds(
+  state: SessionsSnapshot,
+  serverIds: readonly string[],
+): string[] {
+  return serverIds.filter((serverId) => state.sessions[serverId]?.hasListedWorkspaces === true);
 }
 
 export function selectWorkspaceDirectoryServerIds(
