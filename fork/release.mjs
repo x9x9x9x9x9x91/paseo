@@ -2079,8 +2079,9 @@ function keepUpToStop({ start, base, head, record, runDir, cwd }) {
 /**
  * The newest KEEP_RUNS run folders stay for their logs, and of their heavy files (RUN_ARTIFACTS)
  * only those of the newest run that has any: a dry run keeps its release for a look until the
- * next one, and an older dry run's 1.8 GiB goes now (ALM-5078). A real run drops its own as it
- * ends (tryWork); the build host prunes its own run folders the same way (hostPhase).
+ * next one ends, and the older dry run's 1.8 GiB goes then (ALM-5078). runOnce prunes before and
+ * after the work, a real run having dropped its own by then (tryWork); the build host prunes its
+ * own run folders at the end of each half (hostPhase).
  */
 export function pruneRuns(runs = RUNS) {
   const names = readdirSync(runs).sort();
@@ -2636,6 +2637,8 @@ function runOnce(options, state) {
   logPlan(plan, { ctx, options });
   pruneRuns();
   const tried = tryWork({ ctx, options, plan, runDir });
+  // Once more, now a dry run has its release files: the older dry run's go (ALM-5078).
+  pruneRuns();
   if (!tried) return 1;
   const { outcome, failure } = tried;
   if (options.dryRun) {
