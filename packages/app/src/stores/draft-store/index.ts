@@ -38,6 +38,7 @@ import {
   PersistedDraftStoreSchema,
 } from "./migration";
 import { createDraftPersistStorage } from "./persistence";
+import { keepUnreadDraftEntries } from "./unread";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 import {
   followOtherWindowsWritesByKey,
@@ -95,8 +96,9 @@ interface DraftStoreRuntimeState {
 type DraftStore = DraftStoreState & DraftStoreRuntimeState & DraftStoreActions;
 
 let gcScheduled = false;
+const unreadDraftEntries = keepUnreadDraftEntries(AsyncStorage);
 const draftPersistStorage = createDraftPersistStorage(
-  createValidatedPersistStorage(AsyncStorage, PersistedDraftStoreSchema),
+  createValidatedPersistStorage(unreadDraftEntries.storage, PersistedDraftStoreSchema),
 );
 
 let otherWindowsDraftWrites: OtherWindowsWrites | null = null;
@@ -186,6 +188,10 @@ function collectWindowHeldAttachmentIds(): Set<string> {
     referencedIds.add(id);
   }
   for (const id of collectRetainedAttachmentIds()) {
+    referencedIds.add(id);
+  }
+  // A later build's draft entries this build cannot read keep their files (ALM-5148).
+  for (const id of unreadDraftEntries.heldStrings()) {
     referencedIds.add(id);
   }
 
@@ -536,6 +542,11 @@ otherWindowsDraftWrites = followOtherWindowsWritesByKey(
   undefined,
   () => draftsRestored,
 );
+// A draft cleared or sent drops what it held that this build cannot read, a change the interval
+// may write past; from the first hydration on, since the drafts read before it are not yet held.
+useDraftStore.subscribe((state) => {
+  if (draftsRestored) unreadDraftEntries.forgetReplaced(state);
+});
 // A write still waiting for the interval was made before the merge, so it would put back the old
 // copy of what another window just wrote; written again from the merged drafts instead.
 useDraftStore.persist.onFinishHydration(() => {

@@ -36,7 +36,7 @@ export function createSidebarFoldersStorage(
         const stored = await folders.getItem(name);
         if (!stored) return null;
         const tick = await landing.getItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY);
-        const { landingFolderId, knownProjectKeys, ...rest } = stored.state;
+        const { landingFolderId, knownProjectKeys, knownServerIds, ...rest } = stored.state;
         if (landingFolderId !== undefined || knownProjectKeys !== undefined) {
           // The tick's own key first, so a failed write leaves the tick where it was. A failed
           // move never fails the read: the store would start empty and write that over the folders.
@@ -46,6 +46,7 @@ export function createSidebarFoldersStorage(
                 state: {
                   landingFolderId: landingFolderId ?? null,
                   knownProjectKeys: knownProjectKeys ?? [],
+                  knownServerIds: knownServerIds ?? [],
                 },
                 version: stored.version,
               });
@@ -62,7 +63,7 @@ export function createSidebarFoldersStorage(
     },
     setItem: async (name, value) => {
       if (reading > 0) return;
-      const { landingFolderId, knownProjectKeys, ...rest } = value.state;
+      const { landingFolderId, knownProjectKeys, knownServerIds, ...rest } = value.state;
       // Both start now: each skips its write while its key is read, so a read another window's
       // write starts between them would drop the tick's write alone.
       await Promise.all([
@@ -71,6 +72,7 @@ export function createSidebarFoldersStorage(
           state: {
             landingFolderId: landingFolderId ?? null,
             knownProjectKeys: knownProjectKeys ?? [],
+            knownServerIds: knownServerIds ?? [],
           },
           version: value.version,
         }),
