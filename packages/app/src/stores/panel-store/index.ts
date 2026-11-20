@@ -121,7 +121,10 @@ function dockAgentListPatch(state: PanelState): Pick<PanelState, "desktop" | "mo
   };
 }
 
-/** The per-workspace file tree folds, which follow other app windows' writes workspace by workspace. */
+/**
+ * The per-workspace file tree folds, which follow other app windows' writes workspace by
+ * workspace.
+ */
 const FOLLOWED_WORKSPACE_MAPS = [
   "expandedPathsByWorkspace",
   "diffCollapsedFoldersByWorkspace",
@@ -277,10 +280,10 @@ export const usePanelStore = create<PanelState>()(
       version: 17,
       storage: createValidatedPersistStorage(AsyncStorage, PanelPersistedStateSchema),
       migrate: (persistedState, version) => migratePanelState(persistedState, version),
-      // The folds of a workspace follow another window's change to them, so neither window puts back
-      // the other's (ALM-5115). The rest is how this window is laid out (its sidebar, widths, the
-      // explorer's sort), kept per window while it is open; the next start opens with the window
-      // that changed it last, as the sidebar's view prefs do (ALM-5121).
+      // The folds of a workspace follow another window's change to them, so neither window puts
+      // back the other's (ALM-5115). The rest is how this window is laid out (its sidebar, widths,
+      // the explorer's sort), kept per window while it is open; the next start opens with the
+      // window that changed it last, as the sidebar's view prefs do (ALM-5121).
       // Set after the first read, a failed one too, so a later follow merges key by key.
       onRehydrateStorage: () => () => {
         panelStateRestored = true;
@@ -315,4 +318,8 @@ export const usePanelStore = create<PanelState>()(
   ),
 );
 
-otherWindowsPanelWrites = followOtherWindowsWritesByKey(usePanelStore, undefined, () => panelStateRestored);
+otherWindowsPanelWrites = followOtherWindowsWritesByKey(
+  usePanelStore,
+  undefined,
+  () => panelStateRestored,
+);

@@ -112,7 +112,11 @@ export const useBrowserStore = create<BrowserStoreState>()(
 
 // Each app window keeps its own browsers in memory and writes all of them; this takes in the ones
 // another window opened, moved or closed (ALM-5115).
-otherWindowsBrowserWrites = followOtherWindowsWritesByKey(useBrowserStore, undefined, () => browsersRestored);
+otherWindowsBrowserWrites = followOtherWindowsWritesByKey(
+  useBrowserStore,
+  undefined,
+  () => browsersRestored,
+);
 
 export function getBrowserRecord(browserId: string): BrowserRecord | null {
   const normalizedBrowserId = trimNonEmpty(browserId);
