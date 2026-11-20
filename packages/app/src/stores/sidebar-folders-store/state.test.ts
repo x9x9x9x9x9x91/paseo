@@ -6,7 +6,9 @@ import {
   moveSidebarProjectToFolder,
   removeSidebarFolder,
   renameSidebarFolder,
+  NO_FOLDS_UNDER_FILTER,
   toggleSidebarFolderCollapsed,
+  toggleSidebarFolderFoldUnderFilter,
   type SidebarFoldersState,
 } from "@/stores/sidebar-folders-store/state";
 
@@ -87,5 +89,24 @@ describe("sidebar folders", () => {
       folderIdByProjectKey: { alma: "workers" },
     });
     expect(mergePersistedSidebarFolders({ folders: "nope" }, current)).toBe(current);
+  });
+});
+
+describe("folds under a project filter", () => {
+  it("folds and opens a folder under one filter", () => {
+    const folded = toggleSidebarFolderFoldUnderFilter(NO_FOLDS_UNDER_FILTER, "alma", "workers");
+    expect(folded).toEqual({ filterKey: "alma", foldedFolderIds: ["workers"] });
+    expect(toggleSidebarFolderFoldUnderFilter(folded, "alma", "workers")).toEqual({
+      filterKey: "alma",
+      foldedFolderIds: [],
+    });
+  });
+
+  it("drops the folds of another filter", () => {
+    const folded = toggleSidebarFolderFoldUnderFilter(NO_FOLDS_UNDER_FILTER, "alma", "workers");
+    expect(toggleSidebarFolderFoldUnderFilter(folded, "chats", "tools")).toEqual({
+      filterKey: "chats",
+      foldedFolderIds: ["tools"],
+    });
   });
 });
