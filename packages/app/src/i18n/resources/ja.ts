@@ -1343,6 +1343,8 @@ export const ja: TranslationResources = {
       menu: "フォルダの操作",
       moveTo: "フォルダへ移動",
       takeOut: "フォルダから出す",
+      moveLooseHere: "他のすべてのプロジェクトをここに移動",
+      landHere: "新しいプロジェクトをここに入れる",
       create: "新しいフォルダ…",
       createConfirm: "フォルダを作成",
       name: "フォルダ名",

@@ -1335,6 +1335,8 @@ export const ko: TranslationResources = {
       menu: "폴더 작업",
       moveTo: "폴더로 이동",
       takeOut: "폴더에서 빼기",
+      moveLooseHere: "다른 모든 프로젝트를 여기로 이동",
+      landHere: "새 프로젝트를 여기에 넣기",
       create: "새 폴더…",
       createConfirm: "폴더 만들기",
       name: "폴더 이름",
