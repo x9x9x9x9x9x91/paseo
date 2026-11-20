@@ -61,12 +61,18 @@ describe("mergeByPosition", () => {
     ).toEqual(["c", "x", "a", "y", "b"]);
   });
 
-  it("appends reordered keys the current order lacks", () => {
+  it("puts a reordered key the current order lacks before the reordered key after it", () => {
     expect(
       mergeByPosition({
         currentOrder: ["a", "x"],
         reorderedVisibleKeys: ["new", "a"],
       }),
-    ).toEqual(["new", "x", "a"]);
+    ).toEqual(["new", "a", "x"]);
+    expect(
+      mergeByPosition({
+        currentOrder: ["a", "x"],
+        reorderedVisibleKeys: ["a", "new"],
+      }),
+    ).toEqual(["a", "x", "new"]);
   });
 });

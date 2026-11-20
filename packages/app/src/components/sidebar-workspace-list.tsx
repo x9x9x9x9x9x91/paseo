@@ -2684,9 +2684,9 @@ function ProjectModeList({
     [applyVisibleProjectOrder, projectListItems],
   );
 
-  // The actions read the list and the folder of each project at the moment of the click, so the
-  // context they ride in changes only when the folders do, not with every status update that
-  // rebuilds the list (each project row reads it past MemoProjectBlock's equality).
+  // The actions read the project order and the folder of each project at the moment of the
+  // click, so the context they ride in changes only when the folders do, not with every status
+  // update that rebuilds the list (each project row reads it past MemoProjectBlock's equality).
   const projectListItemsRef = useRef(projectListItems);
   projectListItemsRef.current = projectListItems;
   const folderIdByProjectKeyRef = useRef(folderIdByProjectKey);

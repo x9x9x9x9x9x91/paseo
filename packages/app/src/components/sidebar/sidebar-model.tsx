@@ -38,7 +38,7 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   allProjects: SidebarProjectEntry[];
   /** The project filter as it is actually being applied — see `resolveActiveProjectFilters`. */
   resolvedProjectFilters: readonly string[];
-  /** `resolvedProjectFilters` as one key, empty when no project filter is on (`projectFilterKeyOf`). */
+  /** The project filter as one key, empty when none is applied (`projectFilterKeyOf`). */
   projectFilterKey: string;
   hasProjectsBeforeFilter: boolean;
   groupMode: SidebarGroupMode;
@@ -103,9 +103,10 @@ export function SidebarModelProvider({
     [projectFilters, list.projects],
   );
   const hasActiveProjectFilter = resolvedProjectFilters.length > 0;
+  // Keyed by the stored filter: a filtered-to project going offline keeps the folds made under it.
   const projectFilterKey = useMemo(
-    () => projectFilterKeyOf(resolvedProjectFilters),
-    [resolvedProjectFilters],
+    () => (hasActiveProjectFilter ? projectFilterKeyOf(projectFilters) : ""),
+    [hasActiveProjectFilter, projectFilters],
   );
   // The shortcuts skip a folded folder's workspaces, so they read the folds the list shows.
   const folders = useMemo(

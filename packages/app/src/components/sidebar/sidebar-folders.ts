@@ -123,7 +123,7 @@ export function projectKeysInCollapsedFolders<P extends ProjectLike>(
  * themselves, and every place it does not show keeps its place; inside a folder its listed
  * projects do the same around its hidden ones. So a filtered move leaves hidden projects where
  * they stand and a folder carries its hidden projects along (ALM-5054). A listed project the
- * order lacks goes at the end.
+ * order lacks goes just before the listed one after it (`mergeByPosition`).
  */
 export function projectOrderWithListOrder(input: {
   currentOrder: readonly string[];
@@ -192,8 +192,8 @@ function groupKeysByPlace(
  * Which project filter is on, as one key: empty when none is. A fold made under a filter belongs
  * to that filter only.
  */
-export function projectFilterKeyOf(resolvedProjectFilters: readonly string[]): string {
-  return [...resolvedProjectFilters].sort().join("\n");
+export function projectFilterKeyOf(projectFilters: readonly string[]): string {
+  return [...projectFilters].sort().join("\n");
 }
 
 /**
