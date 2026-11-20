@@ -13,14 +13,13 @@ export interface PersistedCollapsedProjects {
   collapsedPinned?: boolean;
 }
 
-export const PersistedCollapsedProjectsSchema: z.ZodType<PersistedCollapsedProjects> =
-  z.strictObject({
-    collapsedProjectKeys: z.array(z.string()).optional(),
-    collapsedWorkspaceGroupKeys: z.array(z.string()).optional(),
-    // COMPAT(sidebarWorkspaceGroupCollapse): added in v0.4.0, remove after 2027-02-14.
-    collapsedStatusGroupKeys: z.array(z.string()).optional(),
-    collapsedPinned: z.boolean().optional(),
-  });
+export const PersistedCollapsedProjectsSchema: z.ZodType<PersistedCollapsedProjects> = z.object({
+  collapsedProjectKeys: z.array(z.string()).optional(),
+  collapsedWorkspaceGroupKeys: z.array(z.string()).optional(),
+  // COMPAT(sidebarWorkspaceGroupCollapse): added in v0.4.0, remove after 2027-02-14.
+  collapsedStatusGroupKeys: z.array(z.string()).optional(),
+  collapsedPinned: z.boolean().optional(),
+});
 
 export function togglePinnedCollapsed(state: CollapsedProjectsState): CollapsedProjectsState {
   return { ...state, collapsedPinned: !state.collapsedPinned };
