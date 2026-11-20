@@ -177,7 +177,10 @@ describe("sidebar folders storage", () => {
       },
       removeItem: (name) => backing.removeItem(name),
     };
-    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
+    backing.setItem(
+      SIDEBAR_FOLDERS_STORAGE_KEY,
+      JSON.stringify({ state: { folders, folderIdByProjectKey: { alma: "workers" } }, version: 0 }),
+    );
     const storage = createSidebarFoldersStorage(slow);
 
     const writing = storage.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, { state: ticked, version: 0 });
