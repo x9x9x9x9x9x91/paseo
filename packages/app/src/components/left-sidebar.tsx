@@ -123,6 +123,7 @@ interface SidebarSharedProps {
   projects: SidebarProjectEntry[];
   hasProjectsBeforeFilter: boolean;
   hasActiveProjectFilter: boolean;
+  projectFilterKey: string;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   isInitialLoad: boolean;
   isRevalidating: boolean;
@@ -180,6 +181,7 @@ export const LeftSidebar = memo(function LeftSidebar({
     projects,
     hasProjectsBeforeFilter,
     resolvedProjectFilters,
+    projectFilterKey,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
@@ -252,6 +254,7 @@ export const LeftSidebar = memo(function LeftSidebar({
     projects,
     hasProjectsBeforeFilter,
     hasActiveProjectFilter: resolvedProjectFilters.length > 0,
+    projectFilterKey,
     workspaceEntriesByKey,
     isInitialLoad,
     isRevalidating,
@@ -573,6 +576,7 @@ function MobileSidebar({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  projectFilterKey,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -656,6 +660,7 @@ function MobileSidebar({
                 projects={projects}
                 hasProjectsBeforeFilter={hasProjectsBeforeFilter}
                 hasActiveProjectFilter={hasActiveProjectFilter}
+                projectFilterKey={projectFilterKey}
                 workspaceEntriesByKey={workspaceEntriesByKey}
                 isRefreshing={isManualRefresh && isRevalidating}
                 onRefresh={handleRefresh}
@@ -732,6 +737,7 @@ function DesktopSidebar({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  projectFilterKey,
   workspaceEntriesByKey,
   isInitialLoad,
   isRevalidating,
@@ -911,6 +917,7 @@ function DesktopSidebar({
                   projects={projects}
                   hasProjectsBeforeFilter={hasProjectsBeforeFilter}
                   hasActiveProjectFilter={hasActiveProjectFilter}
+                  projectFilterKey={projectFilterKey}
                   workspaceEntriesByKey={workspaceEntriesByKey}
                   isRefreshing={isManualRefresh && isRevalidating}
                   onRefresh={handleRefresh}
