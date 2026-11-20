@@ -55,7 +55,11 @@ describe("createValidatedPersistStorage", () => {
     const backing = new MemoryStorage();
     backing.values.set(
       "settings",
-      JSON.stringify({ state: { enabled: true, landing: "workers" }, version: 1, written: "later" }),
+      JSON.stringify({
+        state: { enabled: true, landing: "workers" },
+        version: 1,
+        written: "later",
+      }),
     );
     const storage = createValidatedPersistStorage(backing, StateSchema);
     const read = await storage.getItem("settings");
