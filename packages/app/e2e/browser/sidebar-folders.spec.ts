@@ -20,16 +20,13 @@ function folderRow(page: Page) {
   return page.locator('[data-testid^="sidebar-folder-row-"]');
 }
 
-// The New folder page can mount again as it opens and drop the typed name, which leaves Create
-// disabled, so the name is typed again until Create takes it.
+// The name must stay in the field until Create takes it, so this types it once: a page that
+// mounted again would drop it and leave Create disabled (ALM-5057).
 async function createFolderFromMenu(page: Page, name: string) {
-  const nameField = page.getByTestId("sidebar-folder-create-name");
   const submit = page.getByTestId("sidebar-folder-create-submit");
   await page.getByTestId("sidebar-folder-create").click();
-  await expect(async () => {
-    await nameField.fill(name);
-    await expect(submit).toBeEnabled({ timeout: 1_000 });
-  }).toPass();
+  await page.getByTestId("sidebar-folder-create-name").fill(name);
+  await expect(submit).toBeEnabled();
   await submit.click();
 }
 
@@ -74,9 +71,7 @@ test.describe("Sidebar folders", () => {
 
       await test.step("a new folder takes the project's place, folded", async () => {
         await openMoveToFolder(page, alma.projectKey);
-        await page.getByTestId("sidebar-folder-create").click();
-        await page.getByTestId("sidebar-folder-create-name").fill("Workers");
-        await page.getByTestId("sidebar-folder-create-submit").click();
+        await createFolderFromMenu(page, "Workers");
         await expect(folderRow(page)).toHaveText(/Workers/);
         await expect(projectRow(alma.projectKey)).toHaveCount(0);
         await expect(workspaceRow(chats.workspaceId)).toBeVisible();
@@ -148,9 +143,7 @@ test.describe("Sidebar folders", () => {
         await expect(workspaceRow(workspace.workspaceId)).toBeVisible({ timeout: 30_000 });
       }
       await openMoveToFolder(page, alma.projectKey);
-      await page.getByTestId("sidebar-folder-create").click();
-      await page.getByTestId("sidebar-folder-create-name").fill("Workers");
-      await page.getByTestId("sidebar-folder-create-submit").click();
+      await createFolderFromMenu(page, "Workers");
       await openMoveToFolder(page, substrate.projectKey);
       await page.getByRole("menuitem", { name: "Workers" }).click();
       await expect(projectRow(alma.projectKey)).toHaveCount(0);
