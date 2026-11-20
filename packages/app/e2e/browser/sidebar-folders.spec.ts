@@ -16,6 +16,10 @@ async function openMoveToFolder(page: Page, projectKey: string) {
   await page.getByTestId(`sidebar-project-menu-folder-${projectKey}`).click();
 }
 
+function folderRow(page: Page) {
+  return page.locator('[data-testid^="sidebar-folder-row-"]');
+}
+
 // The name must stay in the field until Create takes it, so this types it once: a page that
 // mounted again would drop it and leave Create disabled (ALM-5057).
 async function createFolderFromMenu(page: Page, name: string) {
@@ -24,10 +28,6 @@ async function createFolderFromMenu(page: Page, name: string) {
   await page.getByTestId("sidebar-folder-create-name").fill(name);
   await expect(submit).toBeEnabled();
   await submit.click();
-}
-
-function folderRow(page: Page) {
-  return page.locator('[data-testid^="sidebar-folder-row-"]');
 }
 
 function folderRowNamed(page: Page, name: string) {

@@ -79,6 +79,8 @@ function GrowsAfterOpen({ afterMs, from, to }: { afterMs: number; from: Size; to
   return <View testID="body" style={grown ? to : from} />;
 }
 
+function noop(): void {}
+
 function mountMenuAbovePill(body: ReactNode, pages?: readonly MenuPageDefinition[]): void {
   mount(
     <View style={PILL_POSITION}>
@@ -104,10 +106,6 @@ function mountMenuAbovePill(body: ReactNode, pages?: readonly MenuPageDefinition
 }
 
 let mounts = 0;
-
-function ignoreText(_value: string): void {}
-
-function ignoreSelect(): void {}
 
 /** Counts its own mounts, the way a page's typed name lives and dies with its component. */
 function CountsMounts() {
@@ -171,12 +169,12 @@ describe("anchored menu surface on web", () => {
         <>
           <MenuTextField
             initialValue="Workers"
-            onChangeText={ignoreText}
+            onChangeText={noop}
             placeholder="Name"
             autoFocus
             testID="field"
           />
-          <MenuItem onSelect={ignoreSelect} testID="confirm">
+          <MenuItem onSelect={noop} testID="confirm">
             Rename
           </MenuItem>
         </>
@@ -196,8 +194,6 @@ describe("anchored menu surface on web", () => {
     expect(document.activeElement).toBe(element("field"));
   });
 });
-
-function noop(): void {}
 
 describe("menu text field keys on web", () => {
   beforeEach(async () => {
