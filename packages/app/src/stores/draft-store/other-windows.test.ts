@@ -25,7 +25,9 @@ async function settle() {
 describe("draft store reading another window's write", () => {
   it("sweeps no attachments and writes nothing back", async () => {
     if (!useDraftStore.persist.hasHydrated()) {
-      await new Promise<void>((resolve) => useDraftStore.persist.onFinishHydration(() => resolve()));
+      await new Promise<void>((resolve) =>
+        useDraftStore.persist.onFinishHydration(() => resolve()),
+      );
     }
     await settle();
     const sweepsAtStartUp = garbageCollections.count;
