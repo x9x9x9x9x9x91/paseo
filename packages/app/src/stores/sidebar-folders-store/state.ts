@@ -119,6 +119,35 @@ export function toggleSidebarFolderCollapsed(
   };
 }
 
+/**
+ * The folds made while a project filter is on, for that filter (`filterKey`) only. They are never
+ * saved: a filter shows its folders open and leaves their saved folds alone (ALM-5054).
+ */
+export interface SidebarFoldsUnderFilter {
+  filterKey: string;
+  foldedFolderIds: string[];
+}
+
+export const NO_FOLDS_UNDER_FILTER: SidebarFoldsUnderFilter = {
+  filterKey: "",
+  foldedFolderIds: [],
+};
+
+/** Folds or opens a folder under the filter `filterKey`; a fold under another filter is dropped. */
+export function toggleSidebarFolderFoldUnderFilter(
+  folds: SidebarFoldsUnderFilter,
+  filterKey: string,
+  folderId: string,
+): SidebarFoldsUnderFilter {
+  const folded = folds.filterKey === filterKey ? folds.foldedFolderIds : [];
+  return {
+    filterKey,
+    foldedFolderIds: folded.includes(folderId)
+      ? folded.filter((id) => id !== folderId)
+      : [...folded, folderId],
+  };
+}
+
 /** A stored state read back: a project naming a folder that is gone is loose again. */
 export function mergePersistedSidebarFolders<S extends SidebarFoldersState>(
   persistedValue: unknown,
