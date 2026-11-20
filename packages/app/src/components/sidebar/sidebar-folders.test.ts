@@ -7,6 +7,7 @@ import {
   projectKeysOfListItems,
   projectKeysWithFolderReordered,
   projectKeysWithProjectInFolder,
+  projectKeysWithProjectsInFolder,
   projectOrderGroupedByFolder,
   projectOrderWithListOrder,
 } from "./sidebar-folders";
@@ -124,6 +125,38 @@ describe("sidebar folders in the project list", () => {
         folderId: "workers",
       }),
     ).toEqual(["chats", "alma", "substrate", "cleanlane"]);
+  });
+});
+
+describe("several projects going into a folder at once (ALM-5108)", () => {
+  it("puts them after the folder's last project in the order they stood", () => {
+    expect(
+      projectKeysWithProjectsInFolder({
+        projectKeys: ["crisis", "chats", "alma", "substrate", "notes", "cleanlane"],
+        folderIdByProjectKey: { alma: "workers" },
+        movingKeys: ["cleanlane", "crisis", "substrate"],
+        folderId: "workers",
+      }),
+    ).toEqual(["chats", "alma", "crisis", "substrate", "cleanlane", "notes"]);
+  });
+
+  it("brings a project the order lacks yet to the folder, and leaves members where they are", () => {
+    expect(
+      projectKeysWithProjectsInFolder({
+        projectKeys: ["chats", "alma", "substrate", "notes"],
+        folderIdByProjectKey: { alma: "workers", substrate: "workers" },
+        movingKeys: ["fresh", "alma"],
+        folderId: "workers",
+      }),
+    ).toEqual(["chats", "alma", "substrate", "fresh", "notes"]);
+    expect(
+      projectKeysWithProjectsInFolder({
+        projectKeys: ["chats", "alma"],
+        folderIdByProjectKey: { alma: "workers" },
+        movingKeys: ["alma"],
+        folderId: "workers",
+      }),
+    ).toEqual(["chats", "alma"]);
   });
 });
 

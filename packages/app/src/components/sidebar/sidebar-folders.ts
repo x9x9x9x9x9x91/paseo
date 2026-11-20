@@ -104,6 +104,35 @@ export function projectKeysWithProjectInFolder(input: {
   ];
 }
 
+/**
+ * The project order once the projects `movingKeys` go into `folderId` together, as
+ * `projectKeysWithProjectInFolder` does for one: after the folder's last project, in the order
+ * they stand, so the folder keeps its place. A key the order lacks yet (a project that just
+ * appeared) joins them at the end; a key already in the folder stays where it is (ALM-5108).
+ * `folderIdByProjectKey` is the folders before the move.
+ */
+export function projectKeysWithProjectsInFolder(input: {
+  projectKeys: readonly string[];
+  folderIdByProjectKey: Readonly<Record<string, string>>;
+  movingKeys: readonly string[];
+  folderId: string;
+}): string[] {
+  const moving = new Set(
+    input.movingKeys.filter((key) => input.folderIdByProjectKey[key] !== input.folderId),
+  );
+  if (moving.size === 0) return [...input.projectKeys];
+  const inOrder = input.projectKeys.filter((key) => moving.has(key));
+  const placed = new Set(inOrder);
+  const arriving = [...inOrder, ...[...moving].filter((key) => !placed.has(key))];
+  const rest = input.projectKeys.filter((key) => !moving.has(key));
+  let lastMemberIndex = -1;
+  rest.forEach((key, index) => {
+    if (input.folderIdByProjectKey[key] === input.folderId) lastMemberIndex = index;
+  });
+  if (lastMemberIndex < 0) return [...rest, ...arriving];
+  return [...rest.slice(0, lastMemberIndex + 1), ...arriving, ...rest.slice(lastMemberIndex + 1)];
+}
+
 /** Projects inside a folded folder: their workspaces are out of sight, like a folded project's. */
 export function projectKeysInCollapsedFolders<P extends ProjectLike>(
   items: readonly SidebarProjectListItem<P>[],
