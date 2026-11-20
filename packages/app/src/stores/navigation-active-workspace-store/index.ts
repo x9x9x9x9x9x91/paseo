@@ -17,7 +17,10 @@ import {
   type NavigateToWorkspaceInput,
 } from "./navigation";
 import { useSessionStore } from "@/stores/session-store";
-import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
+import {
+  isWorkspaceLayoutRestored,
+  useWorkspaceLayoutStore,
+} from "@/stores/workspace-layout-store";
 import { stripHostWorkspaceRouteEchoSearchFromBrowserUrlAfterCommit } from "@/utils/host-route-browser";
 import { navigateToHostWorkspaceRoute } from "@/navigation/workspace-route-navigation";
 
@@ -44,7 +47,7 @@ function navigateDeps(): NavigateToWorkspaceDeps {
       else panels.showMobileAgent();
     },
     getSessionWorkspaces: (serverId) => useSessionStore.getState().sessions[serverId]?.workspaces,
-    isWorkspaceLayoutHydrated: () => useWorkspaceLayoutStore.persist.hasHydrated(),
+    isWorkspaceLayoutHydrated: isWorkspaceLayoutRestored,
     deferOpenTab: (input) => useWorkspaceLayoutStore.getState().deferOpenTab(input),
     openTab: (input) => useWorkspaceLayoutStore.getState().openTab(input),
     rememberLastWorkspace: (selection) => lastWorkspaceSelectionStore.remember(selection),
