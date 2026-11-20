@@ -42,7 +42,14 @@ function createBus() {
 function createPageEvents() {
   const hideListeners: Array<() => void> = [];
   const showListeners: Array<(restored: boolean) => void> = [];
+  const resumeListeners: Array<() => void> = [];
   return {
+    onResume(listener: () => void) {
+      resumeListeners.push(listener);
+    },
+    resume() {
+      for (const listener of resumeListeners) listener();
+    },
     onPageHide(listener: () => void) {
       hideListeners.push(listener);
     },
@@ -316,6 +323,69 @@ describe("attachment sweeps across app windows", () => {
     await windowA.garbageCollectAttachments({ referencedIds: new Set() });
 
     expect(Array.from(shared.ids)).toEqual(["opened-meanwhile"]);
+  });
+
+  it("is asked again once the browser runs it again after freezing it", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const page = createPageEvents();
+    const channelA = bus.channel();
+    const windowA = await openWindow(channelA, shared.store, { closeSource: page });
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, {
+      replyTimeoutMs: 30,
+      holdTimeoutMs: 50,
+    });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle(30);
+
+    // Frozen with no pagehide: B misses it twice, past the hold timeout, and drops it.
+    channelA.freeze(true);
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    channelA.freeze(false);
+    page.resume();
+    await settle(30);
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("answers a sweep that opened while the sweep was still pinging", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 100 });
+    // Window C pongs only when the test says so, and replies to every request at once.
+    const windowC = bus.channel();
+    const seen: { ping?: { from: string; sweepId: string } } = {};
+    windowC.addEventListener("message", ({ data }) => {
+      const message = data as { type: string; from: string; sweepId: string };
+      if (message.type === "ping") seen.ping = message;
+      if (message.type === "request") {
+        windowC.send({
+          type: "reply",
+          from: "c",
+          to: message.from,
+          sweepId: message.sweepId,
+          ids: [],
+        });
+      }
+    });
+    windowC.send({ type: "hello", from: "c" });
+    await settle(30);
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle();
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    await settle();
+    if (!seen.ping) throw new Error("B did not ping");
+    windowC.send({ type: "pong", from: "c", to: seen.ping.from, sweepId: seen.ping.sweepId });
+    await sweep;
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
   });
 
   it("is asked again once the browser shows it again after leaving", async () => {

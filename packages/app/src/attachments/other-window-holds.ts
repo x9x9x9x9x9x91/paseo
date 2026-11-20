@@ -11,6 +11,8 @@ export interface WindowCloseSource {
   onPageHide(listener: () => void): void;
   /** `restored`: the browser kept the page and shows it again, as `pageshow`'s `persisted`. */
   onPageShow(listener: (restored: boolean) => void): void;
+  /** The browser froze the page without a pagehide and now runs it again (`resume`). */
+  onResume(listener: () => void): void;
 }
 
 type HoldMessage =
@@ -107,6 +109,8 @@ export function createOtherWindowHolds(params: {
   let closing = false;
   const pendingSweeps = new Map<string, PendingSweep>();
   const activeSweepIds = new Set<string>();
+  // Sweeps past their request phase, about to list the store.
+  const listingSweepIds = new Set<string>();
   const heldForPeers = new Map<string, () => void>();
   let sweepCounter = 0;
 
@@ -164,7 +168,15 @@ export function createOtherWindowHolds(params: {
     const key = `${from}:${sweepId}`;
     if (heldForPeers.has(key)) return;
     heldForPeers.set(key, () => {});
-    const hold = await params.holdForPeerSweep();
+    let hold: Awaited<ReturnType<typeof params.holdForPeerSweep>>;
+    try {
+      hold = await params.holdForPeerSweep();
+    } catch (error) {
+      // No answer: the sweep skips, as for a window that does not answer.
+      heldForPeers.delete(key);
+      console.warn("[attachments] Could not say what this window holds", error);
+      return;
+    }
     if (!heldForPeers.has(key)) {
       // The sweep gave up on this window first; saying so keeps it known for the next one.
       hold.release();
@@ -200,8 +212,8 @@ export function createOtherWindowHolds(params: {
       case "hello":
         peers.add(message.from);
         post({ type: "here", from: windowId });
-        // A window opened while this one sweeps holds its saves until the sweep is done.
-        for (const sweepId of activeSweepIds) {
+        // A window opened while this one lists the store holds its saves until it is done.
+        for (const sweepId of listingSweepIds) {
           post({ type: "request", from: windowId, sweepId });
         }
         return;
@@ -256,6 +268,10 @@ export function createOtherWindowHolds(params: {
     closing = false;
     discovered = announce();
   });
+  // A frozen page sent no bye and may have been forgotten, so it says hello once more.
+  params.closeSource?.onResume(() => {
+    discovered = announce();
+  });
 
   return {
     whenDiscovered: () => discovered,
@@ -271,6 +287,7 @@ export function createOtherWindowHolds(params: {
       const sweepId = `${windowId}:${sweepCounter}`;
       activeSweepIds.add(sweepId);
       const finish = () => {
+        listingSweepIds.delete(sweepId);
         if (!activeSweepIds.delete(sweepId)) return;
         post({ type: "done", from: windowId, sweepId });
       };
@@ -302,6 +319,7 @@ export function createOtherWindowHolds(params: {
       );
 
       if (waitingOn.size > 0) return missAll(waitingOn);
+      listingSweepIds.add(sweepId);
       const isHeld = () => Date.now() - requestedAt < holdTimeoutMs / 2;
       return { heldIds, isHeld, finish };
     },
@@ -328,5 +346,6 @@ export function defaultWindowCloseSource(): WindowCloseSource | null {
     onPageHide: (listener) => window.addEventListener("pagehide", () => listener()),
     onPageShow: (listener) =>
       window.addEventListener("pageshow", (event) => listener(event.persisted)),
+    onResume: (listener) => document.addEventListener("resume", () => listener()),
   };
 }
