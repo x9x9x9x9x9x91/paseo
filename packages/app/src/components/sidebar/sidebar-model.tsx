@@ -113,14 +113,16 @@ export function SidebarModelProvider({
   const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
   const landingFolderId = useSidebarFoldersStore((state) => state.landingFolderId);
   // A project that appears while a folder is ticked "New projects land here" goes into it, one a
-  // project filter hides too: the list read is every project on the hosts shown (ALM-5108).
+  // project filter hides too: the list read is every project on the hosts shown (ALM-5108). A
+  // host shown for the first time since the tick lands nothing of its first listing (ALM-5148).
   useEffect(() => {
     if (!modelActive || landingFolderId === null) return;
     const projects = list.projects;
+    const listedServerIds = list.hydratedServerIds;
     moveProjectsIntoFolderWithOrder(landingFolderId, () =>
-      useSidebarFoldersStore.getState().landNewProjects(projects),
+      useSidebarFoldersStore.getState().landNewProjects(projects, listedServerIds),
     );
-  }, [landingFolderId, list.projects, modelActive]);
+  }, [landingFolderId, list.projects, list.hydratedServerIds, modelActive]);
   const pinnedWorkspaceOrder = useSidebarOrderStore((state) => state.pinnedWorkspaceOrder);
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleProjectCollapsed,

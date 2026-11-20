@@ -3,7 +3,10 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { useSessionStore } from "@/stores/session-store";
-import { useWorkspaceDirectoryServerIds } from "@/stores/session-store-hooks";
+import {
+  useHydratedWorkspaceServerIds,
+  useWorkspaceDirectoryServerIds,
+} from "@/stores/session-store-hooks";
 import { workspaceEqualityFns } from "@/stores/session-store-hooks/selectors";
 import { useWorkspaceStructure } from "@/stores/session-store-hooks";
 import { getHostRuntimeStore, useHostRegistryLoaded, useHosts } from "@/runtime/host-runtime";
@@ -89,6 +92,11 @@ export interface SidebarWorkspacesListResult {
   workspaceSortSupported: boolean;
   workspacePlacements: SidebarWorkspacePlacement[];
   projects: SidebarProjectEntry[];
+  /**
+   * The hosts shown whose projects the host itself has listed since it connected, not only a
+   * cached copy: a folder's landing reads which hosts' projects it has seen (ALM-5148).
+   */
+  hydratedServerIds: string[];
   projectNamesByViewKey: Map<string, string>;
   isLoading: boolean;
   isInitialLoad: boolean;
@@ -139,6 +147,7 @@ export function useSidebarWorkspacesList(options?: {
   const persistedProjectOrder = useSidebarOrderStore((state) => state.projectOrder ?? EMPTY_ORDER);
 
   const directoryServerIds = useWorkspaceDirectoryServerIds(serverIds);
+  const hydratedServerIds = useHydratedWorkspaceServerIds(serverIds);
 
   const workspaceSort = useSidebarViewStore((state) => state.workspaceSort);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
@@ -204,6 +213,7 @@ export function useSidebarWorkspacesList(options?: {
     workspaceSortSupported,
     workspacePlacements,
     projects,
+    hydratedServerIds,
     projectNamesByViewKey,
     ...loadingState,
     refreshAll,

@@ -65,7 +65,7 @@ const LegacyReviewAttachmentSchema = z.strictObject({
     ),
   }),
 });
-const PersistedComposerAttachmentSchema = z.union([
+export const PersistedComposerAttachmentSchema = z.union([
   UserComposerAttachmentSchema,
   LegacyGithubPrAttachmentSchema,
   LegacyReviewAttachmentSchema,
@@ -104,7 +104,7 @@ const FlatDraftRecordSchema = z.strictObject({
   updatedAt: z.number().optional(),
   version: z.number().int().positive().optional(),
 });
-const PersistedDraftRecordSchema = z.union([NestedDraftRecordSchema, FlatDraftRecordSchema]);
+export const PersistedDraftRecordSchema = z.union([NestedDraftRecordSchema, FlatDraftRecordSchema]);
 export const PersistedDraftStoreSchema = z.object({
   drafts: readableRecordEntries(PersistedDraftRecordSchema).optional(),
   createModalDraft: PersistedDraftRecordSchema.nullable().optional().catch(null),
