@@ -2703,6 +2703,19 @@ function ProjectModeList({
     [applyVisibleProjectOrder, removeFolder],
   );
 
+  // A project taken out of the middle of a folder, loose or into a new folder, would split that
+  // folder in the order, and a filtered list could then show it elsewhere (ALM-5054).
+  const regroupProjectOrder = useCallback(() => {
+    const folderState = useSidebarFoldersStore.getState();
+    setProjectOrderIfChanged(
+      projectOrderGroupedByFolder({
+        order: getProjectOrder(),
+        folders: folderState.folders,
+        folderIdByProjectKey: folderState.folderIdByProjectKey,
+      }),
+    );
+  }, [getProjectOrder, setProjectOrderIfChanged]);
+
   const folderActions = useMemo<SidebarFolderActions>(
     () => ({
       // Every folder, a folder a filter hides included: the picker is no list of rows (ALM-5054).
@@ -2722,26 +2735,18 @@ function ProjectModeList({
           );
         }
         moveProjectToFolderInStore(projectKey, folderId);
-        // A project taken out of the middle of a folder would split it in the order.
-        if (folderId === null) {
-          const folderState = useSidebarFoldersStore.getState();
-          setProjectOrderIfChanged(
-            projectOrderGroupedByFolder({
-              order: getProjectOrder(),
-              folders: folderState.folders,
-              folderIdByProjectKey: folderState.folderIdByProjectKey,
-            }),
-          );
-        }
+        if (folderId === null) regroupProjectOrder();
       },
       createFolderWithProject: (name, projectKey) => {
         createFolder(name, projectKey);
+        regroupProjectOrder();
       },
     }),
     [
       createFolder,
       getProjectOrder,
       moveProjectToFolderInStore,
+      regroupProjectOrder,
       savedFolders,
       setProjectOrderIfChanged,
     ],
