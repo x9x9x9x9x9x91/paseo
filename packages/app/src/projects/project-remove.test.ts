@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getCurrentProjectRemoveReadiness,
   getProjectRemoveReadiness,
   removeProjectFromHosts,
   type ProjectRemoveProject,
@@ -29,6 +30,7 @@ describe("project remove policy", () => {
   it("requires every host to support project removal", () => {
     const readiness = getProjectRemoveReadiness({
       project,
+      isHostConnected: () => true,
       supportsProjectRemove: (serverId) => serverId === "host-a",
     });
 
@@ -38,11 +40,49 @@ describe("project remove policy", () => {
     });
   });
 
+  it("reports a host that is not connected as disconnected, not as needing an update", () => {
+    const readiness = getProjectRemoveReadiness({
+      project,
+      isHostConnected: (serverId) => serverId === "host-a",
+      supportsProjectRemove: (serverId) => serverId === "host-a",
+    });
+
+    expect(readiness).toEqual({
+      kind: "host_disconnected",
+      serverIds: ["host-b"],
+    });
+  });
+
+  it("reports the disconnected host first when another host needs an update", () => {
+    const readiness = getProjectRemoveReadiness({
+      project,
+      isHostConnected: (serverId) => serverId === "host-a",
+      supportsProjectRemove: () => false,
+    });
+
+    expect(readiness).toEqual({
+      kind: "host_disconnected",
+      serverIds: ["host-b"],
+    });
+  });
+
+  it("reads a host the app has no connection or server info for as disconnected", () => {
+    const readiness = getCurrentProjectRemoveReadiness({
+      hosts: [{ serverId: "host-never-connected", projectId: "prj_offline" }],
+    });
+
+    expect(readiness).toEqual({
+      kind: "host_disconnected",
+      serverIds: ["host-never-connected"],
+    });
+  });
+
   it("removes the project from every participating host", async () => {
     const hostA = createProjectRemoveClient();
     const hostB = createProjectRemoveClient();
     const readiness = getProjectRemoveReadiness({
       project,
+      isHostConnected: () => true,
       supportsProjectRemove: () => true,
     });
 
