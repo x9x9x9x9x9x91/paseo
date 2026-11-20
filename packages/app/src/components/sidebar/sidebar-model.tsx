@@ -118,11 +118,11 @@ export function SidebarModelProvider({
   useEffect(() => {
     if (!modelActive || landingFolderId === null) return;
     const projects = list.projects;
-    const listedServerIds = list.hydratedServerIds;
+    const listedServerIds = list.listedServerIds;
     moveProjectsIntoFolderWithOrder(landingFolderId, () =>
       useSidebarFoldersStore.getState().landNewProjects(projects, listedServerIds),
     );
-  }, [landingFolderId, list.projects, list.hydratedServerIds, modelActive]);
+  }, [landingFolderId, list.projects, list.listedServerIds, modelActive]);
   const pinnedWorkspaceOrder = useSidebarOrderStore((state) => state.pinnedWorkspaceOrder);
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleProjectCollapsed,
