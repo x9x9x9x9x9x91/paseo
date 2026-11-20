@@ -104,7 +104,7 @@ describe("sidebar folders storage", () => {
     const foldersValue = stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY);
     expect(OlderBuildEnvelopeSchema.safeParse(foldersValue).success).toBe(true);
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
-      state: { ...storedTick, knownServerIds: null },
+      state: { ...storedTick, knownServerIds: [] },
       version: 0,
     });
   });

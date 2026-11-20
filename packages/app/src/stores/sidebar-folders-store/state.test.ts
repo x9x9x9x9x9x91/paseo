@@ -205,7 +205,7 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
     expect(unchanged).toBe(state);
   });
 
-  it("takes the hosts listed now as listed at a tick stored without them (ALM-5148)", () => {
+  it("takes no host as listed at a tick stored without hosts (ALM-5148)", () => {
     const folders = [{ id: "workers", name: "Workers", collapsed: true }];
     let state = mergePersistedSidebarFolders(
       {
@@ -216,11 +216,17 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
       },
       EMPTY_SIDEBAR_FOLDERS,
     );
-    state = landNewSidebarProjects(state, [repo("alma")], ["mac"]);
-    expect(state.knownServerIds).toEqual(["mac"]);
+    // The first pass may come once a host offline at the tick has its listing in.
     state = landNewSidebarProjects(
       state,
-      [repo("crisis"), repo("old-loose", ["studio"])],
+      [repo("alma"), repo("old-loose", ["studio"])],
+      ["studio"],
+    );
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers" });
+    expect(state.knownServerIds).toEqual(["studio"]);
+    state = landNewSidebarProjects(
+      state,
+      [repo("alma"), repo("old-loose", ["studio"]), repo("crisis", ["studio"])],
       ["mac", "studio"],
     );
     expect(state.folderIdByProjectKey).toEqual({ alma: "workers", crisis: "workers" });
@@ -292,7 +298,7 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
       { folders, folderIdByProjectKey: {}, landingFolderId: "workers", knownProjectKeys: [] },
       EMPTY_SIDEBAR_FOLDERS,
     );
-    expect(withoutHosts.knownServerIds).toBeNull();
+    expect(withoutHosts.knownServerIds).toEqual([]);
     const gone = mergePersistedSidebarFolders(
       { folders, folderIdByProjectKey: {}, landingFolderId: "music", knownProjectKeys: ["x"] },
       EMPTY_SIDEBAR_FOLDERS,

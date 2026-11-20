@@ -46,7 +46,7 @@ export function createSidebarFoldersStorage(
                 state: {
                   landingFolderId: landingFolderId ?? null,
                   knownProjectKeys: knownProjectKeys ?? [],
-                  knownServerIds: knownServerIds ?? null,
+                  knownServerIds: knownServerIds ?? [],
                 },
                 version: stored.version,
               });
@@ -72,7 +72,7 @@ export function createSidebarFoldersStorage(
           state: {
             landingFolderId: landingFolderId ?? null,
             knownProjectKeys: knownProjectKeys ?? [],
-            knownServerIds: knownServerIds ?? null,
+            knownServerIds: knownServerIds ?? [],
           },
           version: value.version,
         }),
