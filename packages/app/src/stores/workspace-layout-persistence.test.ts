@@ -1,6 +1,7 @@
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { expect, it } from "vitest";
 import type { StateStorage } from "zustand/middleware";
+import type { StorageEventSource } from "@/storage/follow-other-windows";
 import {
   createWorkspaceLayoutStore,
   collectAllTabs,
@@ -198,3 +199,82 @@ it.each([1, 2])(
     expect(visible).toEqual(["agent-a"]);
   },
 );
+
+it("takes in only the workspace another app window changed and keeps that change through its own next write", async () => {
+  const values = new Map<string, string>();
+  const storage: StateStorage = {
+    getItem: (name) => values.get(name) ?? null,
+    setItem: (name, value) => {
+      values.set(name, value);
+    },
+    removeItem: (name) => {
+      values.delete(name);
+    },
+  };
+  type StorageListener = Parameters<StorageEventSource["addEventListener"]>[1];
+  const listeners = new Set<StorageListener>();
+  const eventsOfB: StorageEventSource = {
+    addEventListener: (_type, listener) => listeners.add(listener),
+    removeEventListener: (_type, listener) => listeners.delete(listener),
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const shown = "server:shown-in-b";
+  const other = "server:shown-in-a";
+  const openAgent = (
+    store: ReturnType<typeof createWorkspaceLayoutStore>,
+    workspaceKey: string,
+    agentId: string,
+  ) =>
+    store
+      .getState()
+      .openTab({ workspaceKey, target: { kind: "agent", agentId }, intent: "reveal" });
+
+  const windowA = createWorkspaceLayoutStore(undefined, storage);
+  await windowA.persist.rehydrate();
+  openAgent(windowA, other, "agent-a1");
+  await settle();
+  const windowB = createWorkspaceLayoutStore(undefined, storage, eventsOfB);
+  await windowB.persist.rehydrate();
+  openAgent(windowB, shown, "agent-b1");
+  await settle();
+  await windowA.persist.rehydrate();
+  const openInAFollowedByB = async (agentId: string, workspaceKey = other) => {
+    const beforeA = values.get("workspace-layout-state") ?? null;
+    openAgent(windowA, workspaceKey, agentId);
+    await settle();
+    for (const listener of listeners) {
+      listener({
+        key: "workspace-layout-state",
+        oldValue: beforeA,
+        newValue: values.get("workspace-layout-state") ?? null,
+      });
+    }
+    await settle();
+  };
+  // A read B's workspace in, which fills in the explorer pane id B never stored, so A's next
+  // write changes B's entry without changing B's layout: B keeps its own.
+  const layoutShownInB = windowB.getState().layoutByWorkspace[shown];
+  await openInAFollowedByB("agent-a2");
+  expect(windowB.getState().layoutByWorkspace[shown]).toBe(layoutShownInB);
+
+  await openInAFollowedByB("agent-a3");
+
+  expect(windowB.getState().layoutByWorkspace[shown]).toBe(layoutShownInB);
+  const agentIdsOf = (store: typeof windowB, workspaceKey: string) =>
+    collectAllTabs(store.getState().layoutByWorkspace[workspaceKey].root).flatMap((tab) =>
+      tab.target.kind === "agent" ? [tab.target.agentId] : [],
+    );
+  expect(agentIdsOf(windowB, other)).toEqual(["agent-a1", "agent-a2", "agent-a3"]);
+
+  openAgent(windowB, shown, "agent-b2");
+  await settle();
+  const reopened = createWorkspaceLayoutStore(undefined, storage);
+  await reopened.persist.rehydrate();
+  expect(agentIdsOf(reopened, other)).toEqual(["agent-a1", "agent-a2", "agent-a3"]);
+  expect(agentIdsOf(reopened, shown)).toEqual(["agent-b1", "agent-b2"]);
+
+  // A real change to B's workspace from A is still taken in.
+  await windowA.persist.rehydrate();
+  await openInAFollowedByB("agent-a4", shown);
+  expect(agentIdsOf(windowB, shown)).toEqual(["agent-b1", "agent-b2", "agent-a4"]);
+});

@@ -3,6 +3,7 @@ import { create } from "zustand";
 import { persist, type StateStorage } from "zustand/middleware";
 import { z } from "zod";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
 import type { WorkspaceScriptLinkKind } from "@/utils/workspace-script-links";
 
 interface WorkspaceServiceRoutePreferencesState {
@@ -47,3 +48,7 @@ export function createWorkspaceServiceRoutePreferencesStore(storage: StateStorag
 
 export const useWorkspaceServiceRoutePreferencesStore =
   createWorkspaceServiceRoutePreferencesStore(AsyncStorage);
+
+// A route picked in one app window is the one every window opens, and none puts back another's
+// (ALM-5115).
+followOtherWindowsWrites(useWorkspaceServiceRoutePreferencesStore);

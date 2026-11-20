@@ -9,6 +9,8 @@ export interface PersistenceScheduler {
 
 export interface DraftPersistStorage<T> extends PersistStorage<T> {
   flush: () => Promise<void>;
+  /** Whether a write is waiting for the interval, not yet stored. */
+  hasPending: () => boolean;
 }
 
 let nextSystemTimerId = 0;
@@ -95,5 +97,6 @@ export function createDraftPersistStorage<T>(
       return storage.removeItem(name);
     },
     flush,
+    hasPending: () => pending !== null,
   };
 }
