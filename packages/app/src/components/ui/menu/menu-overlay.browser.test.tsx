@@ -3,7 +3,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { Text, View } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { MenuItem, MenuRoot, MenuSurface, MenuTextField, MenuTrigger, type Size } from "./index";
+import {
+  MenuItem,
+  MenuRoot,
+  MenuSubTrigger,
+  MenuSurface,
+  MenuTextField,
+  MenuTrigger,
+  type MenuPageDefinition,
+  type Size,
+} from "./index";
 
 // App sources compile against the classic JSX runtime, which expects React on the global.
 beforeEach(() => vi.stubGlobal("React", React));
@@ -70,7 +79,7 @@ function GrowsAfterOpen({ afterMs, from, to }: { afterMs: number; from: Size; to
   return <View testID="body" style={grown ? to : from} />;
 }
 
-function mountMenuAbovePill(body: ReactNode): void {
+function mountMenuAbovePill(body: ReactNode, pages?: readonly MenuPageDefinition[]): void {
   mount(
     <View style={PILL_POSITION}>
       <MenuRoot>
@@ -84,6 +93,7 @@ function mountMenuAbovePill(body: ReactNode): void {
           minWidth={280}
           maxWidth={620}
           testID="panel"
+          pages={pages}
         >
           {body}
         </MenuSurface>
@@ -150,24 +160,37 @@ describe("anchored menu surface on web", () => {
     expect(mounts).toBe(1);
   });
 
-  // A page whose field took focus as it mounted keeps it once placed, rather than handing it to
-  // its first enabled row, as on a folder's Rename page (ALM-5057).
-  it("leaves focus in an autofocused field once placed", async () => {
+  // A sub page whose field took focus as it mounted keeps it once placed, rather than handing it
+  // to the page's first enabled row, as on a folder's Rename page (ALM-5057).
+  it("leaves focus in a sub page's autofocused field once placed", async () => {
+    const renamePage: MenuPageDefinition = {
+      id: "rename",
+      title: "Rename",
+      hoverIntent: false,
+      content: (
+        <>
+          <MenuTextField
+            initialValue="Workers"
+            onChangeText={ignoreText}
+            placeholder="Name"
+            autoFocus
+            testID="field"
+          />
+          <MenuItem onSelect={ignoreSelect} testID="confirm">
+            Rename
+          </MenuItem>
+        </>
+      ),
+    };
     mountMenuAbovePill(
-      <>
-        <MenuTextField
-          initialValue="Workers"
-          onChangeText={ignoreText}
-          placeholder="Name"
-          autoFocus
-          testID="field"
-        />
-        <MenuItem onSelect={ignoreSelect} testID="confirm">
-          Rename
-        </MenuItem>
-      </>,
+      <MenuSubTrigger id="rename" testID="open-rename">
+        Rename
+      </MenuSubTrigger>,
+      [renamePage],
     );
+    await wait(SETTLE_MS);
 
+    act(() => element("open-rename").click());
     await wait(SETTLE_MS);
 
     expect(document.activeElement).toBe(element("field"));
