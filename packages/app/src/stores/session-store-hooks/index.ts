@@ -7,6 +7,7 @@ import {
   createWorkspaceStructureProjectsSelector,
   selectHasHydratedWorkspaces,
   selectHydratedWorkspaceServerIds,
+  selectListedWorkspaceServerIds,
   selectWorkspaceDirectoryServerIds,
   selectHasWorkspaces,
   selectProjectOrder,
@@ -71,6 +72,14 @@ export function useHydratedWorkspaceServerIds(serverIds: string[]): string[] {
   return useStoreWithEqualityFn(
     useSessionStore,
     (state) => selectHydratedWorkspaceServerIds(state, serverIds),
+    workspaceEqualityFns.deep,
+  );
+}
+
+export function useListedWorkspaceServerIds(serverIds: string[]): string[] {
+  return useStoreWithEqualityFn(
+    useSessionStore,
+    (state) => selectListedWorkspaceServerIds(state, serverIds),
     workspaceEqualityFns.deep,
   );
 }
