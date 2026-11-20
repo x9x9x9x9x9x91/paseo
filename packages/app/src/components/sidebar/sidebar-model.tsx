@@ -9,6 +9,7 @@ import {
 import { useSidebarWorkspaceEntries } from "@/hooks/use-sidebar-workspace-entries";
 import { usePinnedSidebarKeys, type PinnedSidebarGroups } from "@/hooks/use-sidebar-pins";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
+import { useSidebarFoldersStore } from "@/stores/sidebar-folders-store";
 import {
   hasActiveSidebarLabelFilter,
   useSidebarViewStore,
@@ -73,6 +74,8 @@ export function SidebarModelProvider({
     (state) => state.collapsedWorkspaceGroupKeys,
   );
   const pinnedCollapsed = useSidebarCollapsedSectionsStore((state) => state.collapsedPinned);
+  const folders = useSidebarFoldersStore((state) => state.folders);
+  const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
   const pinnedWorkspaceOrder = useSidebarOrderStore((state) => state.pinnedWorkspaceOrder);
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleProjectCollapsed,
@@ -163,11 +166,15 @@ export function SidebarModelProvider({
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
+      folders,
+      folderIdByProjectKey,
       t,
     }),
     [
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
+      folders,
+      folderIdByProjectKey,
       groupMode,
       list.projectNamesByViewKey,
       filteredProjects,
