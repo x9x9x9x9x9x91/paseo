@@ -26,7 +26,7 @@ interface SidebarOrderPersistedState {
 }
 
 const StringArrayRecordSchema = z.record(z.string(), z.array(z.string()));
-const SidebarOrderPersistedStateSchema = z.strictObject({
+const SidebarOrderPersistedStateSchema = z.object({
   projectOrder: z.array(z.string()).optional(),
   pinnedWorkspaceOrder: z.array(z.string()).optional(),
   workspaceOrderByProject: StringArrayRecordSchema.optional(),
