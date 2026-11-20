@@ -99,6 +99,32 @@ describe("sidebar folders storage", () => {
     });
   });
 
+  it("still reads the folders when moving the tick out fails, and keeps the tick where it was", async () => {
+    const backing = new MemoryStorage();
+    const raw = JSON.stringify({ state: ticked, version: 0 });
+    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, raw);
+    const full: StateStorage = {
+      getItem: (name) => backing.getItem(name),
+      setItem: (name, value) => {
+        if (name === SIDEBAR_FOLDER_LANDING_STORAGE_KEY) throw new Error("storage full");
+        backing.setItem(name, value);
+      },
+      removeItem: (name) => backing.removeItem(name),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const storage = createSidebarFoldersStorage(full);
+      await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
+        state: ticked,
+        version: 0,
+      });
+      expect(backing.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).toBe(raw);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("reads the tick's own key over one in the folders' key, and clears the folders' key", async () => {
     const backing = new MemoryStorage();
     backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
