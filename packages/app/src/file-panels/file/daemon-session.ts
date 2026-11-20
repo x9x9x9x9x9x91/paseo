@@ -1,6 +1,11 @@
 import type { DaemonClient, FileReadResult } from "@getpaseo/client/internal/daemon-client";
 import type { FileVersion } from "@getpaseo/protocol/messages";
 import {
+  collectRetainedAttachmentIds,
+  retainAttachmentForGarbageCollection,
+} from "@/attachments/gc-retention";
+import {
+  deleteAttachments,
   persistAttachmentFromBytes,
   releaseAttachmentPreviewUrl,
   resolveAttachmentPreviewUrl,
@@ -78,17 +83,27 @@ export function createDaemonFileSession(
           mimeType,
           path: `${target.cwd}/${target.path}`,
           contentLength: bytes.byteLength,
-          contentKey: String(Date.now()),
+          // A part of its own per preview: two of one file in one millisecond, in this window or
+          // another, would share an id, and the first one closed would delete the other's file.
+          contentKey: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         }),
         bytes,
         mimeType,
         fileName: getFileNameFromPath(target.path),
       });
       const url = await resolveAttachmentPreviewUrl(attachment);
+      // Nothing else names a preview's attachment, so the sweep keeps it only while its URL is
+      // held (on native the URL is the stored file itself), and it goes with the URL (ALM-5127).
+      const releaseRetention = retainAttachmentForGarbageCollection(attachment.id);
       return {
         url,
         release() {
-          void releaseAttachmentPreviewUrl({ attachment, url });
+          releaseRetention();
+          void (async () => {
+            await releaseAttachmentPreviewUrl({ attachment, url });
+            if (collectRetainedAttachmentIds().has(attachment.id)) return;
+            await deleteAttachments([attachment]);
+          })();
         },
       };
     },
