@@ -1752,6 +1752,11 @@ function ProjectBlock({
       const readiness = getCurrentProjectRemoveReadiness({
         hosts: project.hosts,
       });
+      if (readiness.kind === "host_disconnected") {
+        toast.error(t("sidebar.project.toasts.hostDisconnected"));
+        setIsRemovingProject(false);
+        return;
+      }
       if (readiness.kind === "needs_host_update") {
         toast.error(t("sidebar.project.toasts.updateHostToRemove"));
         setIsRemovingProject(false);
