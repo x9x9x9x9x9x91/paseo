@@ -10,6 +10,7 @@ const PREFERRED_EDITOR_STORAGE_KEY = "@paseo:preferred-editor";
 
 interface EditorPreferenceStorage extends ValidatedStorage {
   setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
 }
 
 interface ProjectEditorScope {

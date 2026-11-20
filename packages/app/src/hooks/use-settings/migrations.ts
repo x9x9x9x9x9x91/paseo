@@ -3,7 +3,8 @@ import { readValidatedJson } from "@/storage/validated-storage";
 import { APP_SETTINGS_KEY, SETTINGS_MIGRATIONS_KEY } from "./keys";
 import type { AppSettings, KeyValueStorage, PersistedAppSettings } from "./storage";
 
-const AppliedMigrationsSchema = z.strictObject({ applied: z.array(z.string()) });
+// Loose: a key a later build adds to the marker must not make this build run every migration again.
+const AppliedMigrationsSchema = z.object({ applied: z.array(z.string()) });
 
 /**
  * `sendBehavior` defaulted to "interrupt" for the months before steering existed, and defaults

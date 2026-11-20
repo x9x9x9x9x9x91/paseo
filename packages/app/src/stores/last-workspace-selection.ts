@@ -10,10 +10,9 @@ export const LAST_WORKSPACE_SELECTION_STORAGE_KEY = "paseo:last-workspace-route-
 export interface LastWorkspaceSelectionStorage {
   read(): Promise<string | null>;
   write(value: string): Promise<void>;
-  clear(): Promise<void>;
 }
 
-const ActiveWorkspaceSelectionSchema: z.ZodType<ActiveWorkspaceSelection> = z.strictObject({
+const ActiveWorkspaceSelectionSchema: z.ZodType<ActiveWorkspaceSelection> = z.object({
   serverId: z.string().trim().min(1),
   workspaceId: z.string().trim().min(1),
 });
@@ -74,10 +73,8 @@ export function createLastWorkspaceSelectionStore(storage: LastWorkspaceSelectio
       .read()
       .then((stored) => {
         if (revision === hydrationRevision) {
+          // One this build cannot read stays stored: it may be a later build's (ALM-5138).
           selection = parseStoredWorkspaceSelection(stored);
-          if (stored !== null && selection === null) {
-            void storage.clear().catch(() => {});
-          }
         }
         return undefined;
       })

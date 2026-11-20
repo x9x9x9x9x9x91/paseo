@@ -20,10 +20,6 @@ class DelayedWorkspaceSelectionStorage implements LastWorkspaceSelectionStorage 
     this.saved = value;
   }
 
-  async clear(): Promise<void> {
-    this.saved = null;
-  }
-
   finishHydrationWith(selection: ActiveWorkspaceSelection | null) {
     this.finishRead(selection ? JSON.stringify(selection) : null);
   }
@@ -68,6 +64,22 @@ describe("last workspace selection", () => {
     expect(storage.getSavedSelection()).toEqual({
       serverId: "server-new",
       workspaceId: "workspace-new",
+    });
+  });
+
+  // A later build's selection with a key this build does not know (ALM-5138).
+  it("hydrates a saved selection that has a key it does not know", async () => {
+    const storage = new DelayedWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    const hydration = store.hydrate();
+    const later = { serverId: "server-saved", workspaceId: "workspace-saved", pane: "side" };
+
+    storage.finishHydrationWith(later);
+    await hydration;
+
+    expect(store.getSelection()).toEqual({
+      serverId: "server-saved",
+      workspaceId: "workspace-saved",
     });
   });
 });
