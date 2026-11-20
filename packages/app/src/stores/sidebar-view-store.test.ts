@@ -271,9 +271,9 @@ describe("sidebar view store", () => {
 
   it("reads a stored label grouping as project through the version migration", () => {
     expect(migrateSidebarViewState({ groupMode: "label" }).groupMode).toBe("project");
-    expect(
-      migrateSidebarViewState({ groupModeByServerId: { "host-a": "label" } }).groupMode,
-    ).toBe("project");
+    expect(migrateSidebarViewState({ groupModeByServerId: { "host-a": "label" } }).groupMode).toBe(
+      "project",
+    );
   });
 
   it("falls back to the legacy storage key when the new key is empty", async () => {
