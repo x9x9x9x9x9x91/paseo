@@ -2,12 +2,13 @@ import React, { act, useEffect, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { Text, View } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import {
   MenuItem,
   MenuRoot,
   MenuSubTrigger,
   MenuSurface,
+  MenuTextField,
   MenuTrigger,
   type MenuPageDefinition,
   type Size,
@@ -190,5 +191,59 @@ describe("submenu flyout on a touch screen", () => {
     await wait(HOVER_CLOSE_SETTLED_MS);
 
     expect(document.querySelector('[data-testid="show-option"]')).not.toBeNull();
+  });
+});
+
+function noop(): void {}
+
+describe("menu text field keys on web", () => {
+  beforeEach(async () => {
+    await page.viewport(1280, 900);
+  });
+
+  /** Opens a menu holding a name field above a row, and gives the placed field focus. */
+  async function focusFieldInPlacedMenu(): Promise<HTMLInputElement> {
+    mountMenuAbovePill(
+      <>
+        <MenuTextField
+          initialValue="Workers"
+          onChangeText={noop}
+          placeholder="Name"
+          testID="field"
+        />
+        <MenuItem onSelect={noop} testID="confirm">
+          Rename
+        </MenuItem>
+      </>,
+    );
+    await wait(SETTLE_MS);
+    const field = element("field");
+    if (!(field instanceof HTMLInputElement)) throw new Error("field is not an input");
+    field.focus();
+    expect(document.activeElement).toBe(field);
+    return field;
+  }
+
+  // Home and End reach a menu's field with their default intact, so they move the caret there
+  // rather than focus to the page's first or last row, as on a folder's Rename page (ALM-5060).
+  // The caret's landing differs by platform (macOS binds Home/End to scrolling), so the check is
+  // that the field got the key unprevented and kept focus.
+  it.each(["Home", "End"])("leaves %s to the focused field", async (key) => {
+    const field = await focusFieldInPlacedMenu();
+    const reached: boolean[] = [];
+    field.addEventListener("keydown", (event) => reached.push(event.defaultPrevented));
+
+    await userEvent.keyboard(`{${key}}`);
+
+    expect(reached).toEqual([false]);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("moves from the field to the rows on ArrowDown", async () => {
+    await focusFieldInPlacedMenu();
+
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(document.activeElement).toBe(element("confirm"));
   });
 });
