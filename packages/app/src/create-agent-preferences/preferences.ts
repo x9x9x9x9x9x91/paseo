@@ -31,7 +31,7 @@ function renameLegacyFeatureValues(value: unknown): unknown {
 
 const providerPreferencesSchema: z.ZodType<ProviderPreferences> = z.preprocess(
   renameLegacyFeatureValues,
-  z.strictObject({
+  z.object({
     model: z.string().optional(),
     mode: z.string().optional(),
     thinkingByModel: z.record(z.string(), z.string()).optional(),
@@ -58,11 +58,13 @@ function convertLegacyCodexOptions(
 }
 
 const launchTargetSchema: z.ZodType<LaunchTarget> = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("chat") }),
-  z.strictObject({ kind: z.literal("terminal"), profileId: z.string() }),
+  z.object({ kind: z.literal("chat") }),
+  z.object({ kind: z.literal("terminal"), profileId: z.string() }),
 ]);
 
-export const FormPreferencesSchema = z.strictObject({
+// Read loosely, and a choice this build does not know reads as unset, so preferences a later
+// build stored keep everything else on an older one (ALM-5138).
+export const FormPreferencesSchema = z.object({
   provider: z.string().optional(),
   providerPreferences: z
     .record(z.string(), providerPreferencesSchema)
@@ -73,16 +75,16 @@ export const FormPreferencesSchema = z.strictObject({
   // import it; ordinary preference writes must not erase it first.
   favoriteModels: z
     .array(
-      z.strictObject({
+      z.object({
         provider: z.string(),
         modelId: z.string(),
       }),
     )
     .optional(),
-  isolation: z.enum(["local", "worktree"]).optional(),
+  isolation: z.enum(["local", "worktree"]).optional().catch(undefined),
   // What the New workspace composer submits to: the chat agent (default) or a
   // terminal profile. See `@/new-workspace-launch` for resolution/fallback.
-  launchTarget: launchTargetSchema.optional(),
+  launchTarget: launchTargetSchema.optional().catch(undefined),
 }) satisfies z.ZodType<FormPreferences>;
 
 const LegacyProviderPreferencesSchema = z.strictObject({
@@ -118,9 +120,11 @@ const LegacyFormPreferencesSchema = z
     };
   });
 
+// The legacy shape first and strict: the loose current one would read a legacy value too and drop
+// its `thinkingOptionId`. A current value it also reads comes out the same (ALM-5138).
 export const StoredFormPreferencesSchema: z.ZodType<FormPreferences> = z.union([
-  FormPreferencesSchema,
   LegacyFormPreferencesSchema,
+  FormPreferencesSchema,
 ]);
 
 export const DEFAULT_FORM_PREFERENCES: FormPreferences = {};

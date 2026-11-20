@@ -1,4 +1,5 @@
 import type { AttachmentMetadata, UserComposerAttachment } from "@/attachments/types";
+import { readableEntries, readableRecordEntries } from "@/storage/validated-persist-storage";
 import { isLegacyNewWorkspaceDraftKey, NEW_WORKSPACE_DRAFT_KEY } from "@/stores/draft-keys";
 import { z } from "zod";
 import {
@@ -75,12 +76,15 @@ const LegacyAttachmentMetadataSchema = AttachmentMetadataSchema.extend({
 });
 type PersistedImage = PersistedDraftImage | z.infer<typeof LegacyAttachmentMetadataSchema>;
 
+// An attachment, draft or modal draft this build cannot read, such as one of a kind a later build
+// added, is left out alone rather than failing every draft (ALM-5138).
 const RawDraftInputSchema = z.object({
   text: z.string().optional(),
-  attachments: z.array(PersistedComposerAttachmentSchema).optional(),
+  attachments: readableEntries(PersistedComposerAttachmentSchema).optional(),
   images: z
     .array(
-      z.union([AttachmentMetadataSchema, LegacyAttachmentMetadataSchema, LegacyDraftImageSchema]),
+      // The shape with `previewUri` first: the attachment metadata reads it too, without the key.
+      z.union([LegacyAttachmentMetadataSchema, AttachmentMetadataSchema, LegacyDraftImageSchema]),
     )
     .optional(),
   cwd: z.string().optional(),
@@ -102,8 +106,8 @@ const FlatDraftRecordSchema = z.strictObject({
 });
 const PersistedDraftRecordSchema = z.union([NestedDraftRecordSchema, FlatDraftRecordSchema]);
 export const PersistedDraftStoreSchema = z.object({
-  drafts: z.record(z.string(), PersistedDraftRecordSchema).optional(),
-  createModalDraft: PersistedDraftRecordSchema.nullable().optional(),
+  drafts: readableRecordEntries(PersistedDraftRecordSchema).optional(),
+  createModalDraft: PersistedDraftRecordSchema.nullable().optional().catch(null),
 });
 type PersistedDraftRecord = z.infer<typeof PersistedDraftRecordSchema>;
 

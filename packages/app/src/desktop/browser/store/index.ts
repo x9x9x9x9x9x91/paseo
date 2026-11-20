@@ -2,7 +2,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BrowserAutomationBrowserIdSchema } from "@getpaseo/protocol/browser-automation/rpc-schemas";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
+import {
+  createValidatedPersistStorage,
+  keepStoredState,
+} from "@/storage/validated-persist-storage";
 import {
   followOtherWindowsWritesByKey,
   mergeFollowedEntries,
@@ -94,6 +97,7 @@ export const useBrowserStore = create<BrowserStoreState>()(
     {
       name: "workspace-browser-store",
       storage: createValidatedPersistStorage(AsyncStorage, BrowserIndexStateSchema),
+      migrate: keepStoredState<BrowserIndexState>,
       partialize: (state) => sanitizeBrowsersForPersist(state),
       // Another window's write takes in only the browsers it changed, so this window keeps the
       // live state (loading, last error) of the ones it shows (ALM-5115).
