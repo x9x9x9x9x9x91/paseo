@@ -1,8 +1,20 @@
 import type { KeyboardInputEvent } from "@/keyboard";
+
+function isTextEditingElement(element: Element | null): boolean {
+  if (!(element instanceof HTMLElement)) return false;
+  if (element.isContentEditable) return true;
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+}
+
+/**
+ * Moves focus between a menu page's enabled rows. Home and End stay with a focused text field,
+ * where they move the caret, while ArrowUp/ArrowDown still leave it for the rows (ALM-5060).
+ */
 export function navigateMenuKeyboard(event: KeyboardInputEvent): boolean {
   const target = document.activeElement;
   const surface = target?.closest<HTMLElement>('[data-menu-surface="true"]');
   if (!surface) return false;
+  if ((event.key === "Home" || event.key === "End") && isTextEditingElement(target)) return false;
   const items = Array.from(
     surface.querySelectorAll<HTMLElement>(
       '[data-menu-item="true"]:not([data-menu-disabled="true"])',
