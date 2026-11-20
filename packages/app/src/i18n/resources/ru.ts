@@ -1363,6 +1363,17 @@ export const ru: TranslationResources = {
         "Добавьте команды настройки для автоматической установки зависимостей и подготовки новых worktree.",
       openProjectSettings: "Открыть настройки проекта",
     },
+    folder: {
+      menu: "Действия с папкой",
+      moveTo: "Переместить в папку",
+      takeOut: "Убрать из папки",
+      create: "Новая папка…",
+      createConfirm: "Создать папку",
+      name: "Название папки",
+      rename: "Переименовать папку",
+      renameConfirm: "Переименовать",
+      remove: "Удалить папку",
+    },
     project: {
       actions: {
         menu: "Действия проекта",
