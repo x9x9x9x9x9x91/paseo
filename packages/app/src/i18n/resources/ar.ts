@@ -1321,6 +1321,8 @@ export const ar: TranslationResources = {
       menu: "إجراءات المجلد",
       moveTo: "نقل إلى مجلد",
       takeOut: "إخراج من المجلد",
+      moveLooseHere: "نقل كل المشاريع الأخرى إلى هنا",
+      landHere: "المشاريع الجديدة تُضاف هنا",
       create: "مجلد جديد…",
       createConfirm: "إنشاء مجلد",
       name: "اسم المجلد",
