@@ -6,8 +6,11 @@ export interface HoldChannel {
   addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
 }
 
+/** The page's leave and return, so a test can pass its own. */
 export interface WindowCloseSource {
-  addEventListener(type: "pagehide", listener: () => void): void;
+  onPageHide(listener: () => void): void;
+  /** `restored`: the browser kept the page and shows it again, as `pageshow`'s `persisted`. */
+  onPageShow(listener: (restored: boolean) => void): void;
 }
 
 type HoldMessage =
@@ -188,10 +191,16 @@ export function createOtherWindowHolds(params: {
     }
   });
 
-  params.closeSource?.addEventListener("pagehide", () => {
+  params.closeSource?.onPageHide(() => {
     closing = true;
     post({ type: "bye", from: windowId });
     for (const key of Array.from(heldForPeers.keys())) releasePeerHold(key);
+  });
+  // A page the browser kept and shows again said bye on leaving, so it says hello once more.
+  params.closeSource?.onPageShow((restored) => {
+    if (!restored) return;
+    closing = false;
+    post({ type: "hello", from: windowId });
   });
 
   post({ type: "hello", from: windowId });
@@ -263,5 +272,9 @@ export function defaultWindowCloseSource(): WindowCloseSource | null {
   if (!isWeb || typeof window === "undefined" || typeof window.addEventListener !== "function") {
     return null;
   }
-  return window;
+  return {
+    onPageHide: (listener) => window.addEventListener("pagehide", () => listener()),
+    onPageShow: (listener) =>
+      window.addEventListener("pageshow", (event) => listener(event.persisted)),
+  };
 }

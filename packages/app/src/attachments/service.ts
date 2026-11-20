@@ -4,6 +4,7 @@ import {
   defaultHoldChannel,
   defaultWindowCloseSource,
   type HoldChannel,
+  type WindowCloseSource,
   type OtherWindowHolds,
 } from "@/attachments/other-window-holds";
 import { getAttachmentStore } from "@/attachments/store";
@@ -56,6 +57,7 @@ export function __useOtherWindowChannelForTests(
   channel: HoldChannel | null,
   options: {
     windowId?: string;
+    closeSource?: WindowCloseSource | null;
     replyTimeoutMs?: number;
     holdTimeoutMs?: number;
     discoveryMs?: number;
@@ -278,20 +280,22 @@ export async function garbageCollectAttachments(input: {
   referencedIds: ReadonlySet<string>;
 }): Promise<void> {
   const holds = getOtherWindowHolds();
-  // Before this window holds its own saves: a start-up sweep first learns the open windows.
+  // A start-up sweep first learns the open windows.
   await holds.whenDiscovered();
-  const releaseHold = beginPersistenceHold();
 
   const previousGarbageCollection = garbageCollectionTail;
   const currentGarbageCollection = (async () => {
     await previousGarbageCollection;
-    await waitForActivePersistence();
+    // This window's saves run on while the others answer: each one lands in the recent saves,
+    // read below, so a window gone silent does not stall a paste for the reply timeout.
     const otherWindows = await holds.beginSweep();
     if (!otherWindows) {
       console.warn("[attachments] Skipped a sweep: another app window did not say what it holds");
       return;
     }
+    const releaseHold = beginPersistenceHold();
     try {
+      await waitForActivePersistence();
       // Read again now, as the caller's ids may predate the waits above.
       const referencedIds = new Set(input.referencedIds);
       for (const id of collectWindowAttachmentIds()) {
@@ -316,14 +320,10 @@ export async function garbageCollectAttachments(input: {
       }
       await store.garbageCollect({ referencedIds });
     } finally {
+      releaseHold();
       otherWindows.finish();
     }
   })();
   garbageCollectionTail = currentGarbageCollection.catch(() => undefined);
-
-  try {
-    await currentGarbageCollection;
-  } finally {
-    releaseHold();
-  }
+  await currentGarbageCollection;
 }

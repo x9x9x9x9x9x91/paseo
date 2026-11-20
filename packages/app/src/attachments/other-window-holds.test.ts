@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { HoldChannel } from "@/attachments/other-window-holds";
+import type { HoldChannel, WindowCloseSource } from "@/attachments/other-window-holds";
 import type { AttachmentMetadata, AttachmentStore } from "@/attachments/types";
 
 type ServiceModule = typeof import("./service");
@@ -25,6 +25,25 @@ function createBus() {
           listeners.add(listener);
         },
       };
+    },
+  };
+}
+
+function createPageEvents() {
+  const hideListeners: Array<() => void> = [];
+  const showListeners: Array<(restored: boolean) => void> = [];
+  return {
+    onPageHide(listener: () => void) {
+      hideListeners.push(listener);
+    },
+    onPageShow(listener: (restored: boolean) => void) {
+      showListeners.push(listener);
+    },
+    hide() {
+      for (const listener of hideListeners) listener();
+    },
+    show(restored: boolean) {
+      for (const listener of showListeners) listener(restored);
     },
   };
 }
@@ -97,7 +116,12 @@ function createSharedStore(initialIds: string[]) {
 async function openWindow(
   channel: HoldChannel,
   store: AttachmentStore,
-  options: { replyTimeoutMs?: number; holdTimeoutMs?: number; discoveryMs?: number } = {},
+  options: {
+    replyTimeoutMs?: number;
+    holdTimeoutMs?: number;
+    discoveryMs?: number;
+    closeSource?: WindowCloseSource;
+  } = {},
 ): Promise<ServiceModule> {
   vi.resetModules();
   const service = await import("./service");
@@ -221,6 +245,44 @@ describe("attachment sweeps across app windows", () => {
 
     await windowB.garbageCollectAttachments({ referencedIds: new Set() });
     expect(Array.from(shared.ids).toSorted()).toEqual(["large", "screenshot"]);
+  });
+
+  it("lets this window save while it waits on a window that does not answer", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 200 });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle(30);
+    let sweepEnded = false;
+
+    const sweep = (async () => {
+      await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+      sweepEnded = true;
+    })();
+    await settle();
+    await windowB.persistAttachmentFromBytes({ id: "pasted", ...bytes });
+
+    expect(sweepEnded).toBe(false);
+    await sweep;
+  });
+
+  it("is asked again once the browser shows it again after leaving", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const page = createPageEvents();
+    const windowA = await openWindow(bus.channel(), shared.store, { closeSource: page });
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle(30);
+
+    page.hide();
+    await settle();
+    page.show(true);
+    await settle();
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
   });
 
   it("does not wait on a window that has closed", async () => {
