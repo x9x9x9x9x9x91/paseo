@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { StateStorage } from "zustand/middleware";
 import {
@@ -134,6 +134,48 @@ describe("sidebar folders storage", () => {
     await expect(reading).resolves.toEqual({ state: ticked, version: 0 });
     await expect(storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY)).resolves.toEqual({
       state: ticked,
+      version: 0,
+    });
+  });
+
+  it("writes the tick when another window's read starts while the folders are written", async () => {
+    const backing = new MemoryStorage();
+    let finishFoldersWrite = () => {};
+    let finishTickRead = () => {};
+    let tickReadStarted = false;
+    const slow: StateStorage = {
+      getItem: (name) => {
+        if (name !== SIDEBAR_FOLDER_LANDING_STORAGE_KEY) return backing.getItem(name);
+        tickReadStarted = true;
+        return new Promise<string | null>((resolve) => {
+          finishTickRead = () => resolve(backing.getItem(name));
+        });
+      },
+      setItem: (name, value) => {
+        if (name !== SIDEBAR_FOLDERS_STORAGE_KEY) return backing.setItem(name, value);
+        return new Promise<void>((resolve) => {
+          finishFoldersWrite = () => {
+            backing.setItem(name, value);
+            resolve();
+          };
+        });
+      },
+      removeItem: (name) => backing.removeItem(name),
+    };
+    backing.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, JSON.stringify({ state: ticked, version: 0 }));
+    const storage = createSidebarFoldersStorage(slow);
+
+    const writing = storage.setItem(SIDEBAR_FOLDERS_STORAGE_KEY, { state: ticked, version: 0 });
+    // What another window's write does here: this window reads both keys again.
+    const reading = storage.getItem(SIDEBAR_FOLDERS_STORAGE_KEY);
+    await vi.waitFor(() => expect(tickReadStarted).toBe(true));
+    finishFoldersWrite();
+    await writing;
+    finishTickRead();
+    await reading;
+
+    expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual({
+      state: { landingFolderId: "workers", knownProjectKeys: ["alma", "chats"] },
       version: 0,
     });
   });

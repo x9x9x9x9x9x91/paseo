@@ -42,14 +42,18 @@ export function createSidebarFoldersStorage(
     setItem: async (name, value) => {
       if (reading > 0) return;
       const { landingFolderId, knownProjectKeys, ...rest } = value.state;
-      await folders.setItem(name, { ...value, state: rest });
-      await landing.setItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY, {
-        state: {
-          landingFolderId: landingFolderId ?? null,
-          knownProjectKeys: knownProjectKeys ?? [],
-        },
-        version: value.version,
-      });
+      // Both start now: each skips its write while its key is read, so a read another window's
+      // write starts between them would drop the tick's write alone.
+      await Promise.all([
+        folders.setItem(name, { ...value, state: rest }),
+        landing.setItem(SIDEBAR_FOLDER_LANDING_STORAGE_KEY, {
+          state: {
+            landingFolderId: landingFolderId ?? null,
+            knownProjectKeys: knownProjectKeys ?? [],
+          },
+          version: value.version,
+        }),
+      ]);
     },
     removeItem: async (name) => {
       await folders.removeItem(name);
