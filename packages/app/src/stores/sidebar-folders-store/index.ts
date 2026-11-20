@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { followOtherWindowsWrites } from "@/storage/follow-other-windows";
+import { keepStoredState } from "@/storage/validated-persist-storage";
 import {
   createSidebarFolder,
   EMPTY_SIDEBAR_FOLDERS,
@@ -98,6 +99,7 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
     {
       name: SIDEBAR_FOLDERS_STORAGE_KEY,
       storage: createSidebarFoldersStorage(AsyncStorage),
+      migrate: keepStoredState,
       partialize: persistedSidebarFolders,
       merge: (persistedState, currentState) =>
         mergePersistedSidebarFolders(persistedState, currentState),

@@ -32,17 +32,17 @@ describe("workspace service route preferences", () => {
     expect(restored.getState().byServerId).toEqual({ desktop: "direct", devbox: "public" });
   });
 
-  it("clears the complete persisted value when one route kind is invalid", async () => {
-    const storage = createMemoryStorage({
-      "workspace-service-route-preferences": JSON.stringify({
-        state: { byServerId: { desktop: "direct", broken: "unknown" } },
-        version: 1,
-      }),
+  // A route kind a later build adds would wipe every host's route on an older one (ALM-5138).
+  it("leaves out only a route of a kind it does not know and keeps the stored value", async () => {
+    const stored = JSON.stringify({
+      state: { byServerId: { desktop: "direct", later: "unknown" } },
+      version: 1,
     });
+    const storage = createMemoryStorage({ "workspace-service-route-preferences": stored });
     const store = createWorkspaceServiceRoutePreferencesStore(storage);
     await store.persist.rehydrate();
 
-    expect(store.getState().byServerId).toEqual({});
-    expect(storage.values.has("workspace-service-route-preferences")).toBe(false);
+    expect(store.getState().byServerId).toEqual({ desktop: "direct" });
+    expect(storage.values.get("workspace-service-route-preferences")).toBe(stored);
   });
 });

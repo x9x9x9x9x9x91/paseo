@@ -431,6 +431,20 @@ describe("loadAppSettingsFromStorage", () => {
     expect(legacySide.openInSidePane).not.toHaveProperty("pullRequests");
   });
 
+  // A location a later build adds would read the whole blob as the defaults (ALM-5138).
+  it("reads a PR location it does not know as the default and keeps the other settings", async () => {
+    const result = await loadAppSettingsFromStorage(
+      makeDeps({
+        storage: createInMemoryKeyValueStorage({
+          [APP_SETTINGS_KEY]: JSON.stringify({ theme: "light", pullRequestOpenLocation: "bottom" }),
+        }),
+      }),
+    );
+
+    expect(result.theme).toBe("light");
+    expect(result.pullRequestOpenLocation).toBe("explorer");
+  });
+
   it("counts every project by default and keeps a stored choice of projects", async () => {
     const defaults = await loadAppSettingsFromStorage(makeDeps());
     const chosen = await loadAppSettingsFromStorage(
@@ -814,8 +828,7 @@ describe("saveAppSettings", () => {
     expect(loaded.pluginThemeId).toBe("catppuccin/theme/mocha");
   });
 
-  // The row items are written as one object through one strict schema, so an item the schema
-  // does not know does not just fail to persist itself — it takes every sibling toggle with it.
+  // The row items are written as one object: each item has to read back from it on its own.
   it.each(SIDEBAR_ROW_ITEMS)("persists the %s row item being switched off", async (item) => {
     const deps = makeDeps();
     const queryClient = new QueryClient();
