@@ -142,6 +142,7 @@ export const TOOLS_PARTS = new Set([
   "pickBuildHost",
   "hostRun",
   "rsync",
+  "RUN_ARTIFACTS",
   "dropArtifacts",
   "shellQuote",
   "deliverArgs",
@@ -1397,12 +1398,15 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
   );
 }
 
+// The heavy files of a run folder: the app's archives, the release, signing and checking.
+const RUN_ARTIFACTS = [APP_ARCHIVE, SIGNED_ARCHIVE, "release", "sign", "check"];
+
 /** The heavy files of a run (the app's archives, the release) go once it has settled. */
 function dropArtifacts({ host, runDir }) {
-  const heavy = [APP_ARCHIVE, SIGNED_ARCHIVE, "release", "sign", "check"];
-  for (const name of heavy) rmSync(path.join(runDir, name), { recursive: true, force: true });
+  for (const name of RUN_ARTIFACTS)
+    rmSync(path.join(runDir, name), { recursive: true, force: true });
   if (host) {
-    const paths = heavy.map((name) => `${hostRun(path.basename(runDir))}/${name}`);
+    const paths = RUN_ARTIFACTS.map((name) => `${hostRun(path.basename(runDir))}/${name}`);
     ssh(host, shellLine(["rm", "-rf", ...paths]), { quiet: true, timeoutMs: 120_000 });
   }
 }
@@ -2072,10 +2076,26 @@ function keepUpToStop({ start, base, head, record, runDir, cwd }) {
   return before;
 }
 
-function pruneRuns() {
-  const runs = readdirSync(RUNS).sort();
-  for (const old of runs.slice(0, Math.max(0, runs.length - KEEP_RUNS))) {
-    rmSync(path.join(RUNS, old), { recursive: true, force: true });
+/**
+ * The newest KEEP_RUNS run folders stay for their logs, and of their heavy files (RUN_ARTIFACTS)
+ * only those of the newest run that has any: a dry run keeps its release for a look until the
+ * next one ends, and the older dry run's 1.8 GiB goes then (ALM-5078). runOnce prunes before and
+ * after the work, a real run having dropped its own by then (tryWork); the build host prunes its
+ * own run folders at the end of each half (hostPhase).
+ */
+export function pruneRuns(runs = RUNS) {
+  const names = readdirSync(runs).sort();
+  const cut = Math.max(0, names.length - KEEP_RUNS);
+  for (const old of names.slice(0, cut)) {
+    rmSync(path.join(runs, old), { recursive: true, force: true });
+  }
+  const kept = names.slice(cut);
+  const heavy = (name) => RUN_ARTIFACTS.some((file) => existsSync(path.join(runs, name, file)));
+  const newest = kept.findLastIndex(heavy);
+  for (const name of kept.slice(0, Math.max(0, newest))) {
+    for (const file of RUN_ARTIFACTS) {
+      rmSync(path.join(runs, name, file), { recursive: true, force: true });
+    }
   }
 }
 
@@ -2617,6 +2637,8 @@ function runOnce(options, state) {
   logPlan(plan, { ctx, options });
   pruneRuns();
   const tried = tryWork({ ctx, options, plan, runDir });
+  // Once more, now a dry run has its release files: the older dry run's go (ALM-5078).
+  pruneRuns();
   if (!tried) return 1;
   const { outcome, failure } = tried;
   if (options.dryRun) {
