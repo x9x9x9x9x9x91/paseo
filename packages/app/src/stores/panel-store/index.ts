@@ -129,6 +129,7 @@ const FOLLOWED_WORKSPACE_MAPS = [
 ] as const;
 
 let otherWindowsPanelWrites: OtherWindowsWrites | null = null;
+let panelStateRestored = false;
 
 export const usePanelStore = create<PanelState>()(
   persist(
@@ -280,6 +281,10 @@ export const usePanelStore = create<PanelState>()(
       // the other's (ALM-5115). The rest is how this window is laid out (its sidebar, widths, the
       // explorer's sort), kept per window while it is open; the next start opens with the window
       // that changed it last, as the sidebar's view prefs do (ALM-5121).
+      // Set after the first read, a failed one too, so a later follow merges key by key.
+      onRehydrateStorage: () => () => {
+        panelStateRestored = true;
+      },
       merge: (persistedState, currentState) => {
         const stored = persistedState as Partial<PanelState> | undefined;
         const before = otherWindowsPanelWrites?.takeStateBefore();
@@ -310,4 +315,4 @@ export const usePanelStore = create<PanelState>()(
   ),
 );
 
-otherWindowsPanelWrites = followOtherWindowsWritesByKey(usePanelStore);
+otherWindowsPanelWrites = followOtherWindowsWritesByKey(usePanelStore, undefined, () => panelStateRestored);

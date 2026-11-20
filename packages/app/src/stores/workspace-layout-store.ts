@@ -1070,11 +1070,23 @@ function followOtherWindowsLayout(
     currentState: WorkspaceLayoutStore,
   ) => WorkspaceLayoutStore,
 ) {
+  const project = createPersistedStateProjection();
   return (persistedState: unknown, currentState: WorkspaceLayoutStore): WorkspaceLayoutStore => {
     const merged = mergeStored(persistedState, currentState);
     const before = getOtherWindowsWrites()?.takeStateBefore();
     if (!before || merged === currentState) return merged;
     const changed = changedWorkspaceKeys(before, persistedState);
+    // Reading a layout in fills in what its window never stored (the explorer pane's id), so a
+    // workspace another window only read in comes back written differently: it is taken in only
+    // when it reads in to something other than this window's own copy does.
+    const ownReadIn = project(mergeStored(project(currentState), currentState));
+    const differsFromOwn = changedWorkspaceKeys(
+      ownReadIn as unknown as Record<string, unknown>,
+      project(merged),
+    );
+    for (const key of changed) {
+      if (!differsFromOwn.has(key)) changed.delete(key);
+    }
     if (changed.size === 0) return currentState;
     const next: Record<string, unknown> = { ...merged };
     for (const slice of PERSISTED_SLICES) {
@@ -1102,6 +1114,7 @@ export function createWorkspaceLayoutStore(
   otherWindowsSource: StorageEventSource | null = null,
 ) {
   let otherWindowsWrites: OtherWindowsWrites | null = null;
+  let restored = false;
   const store = create<WorkspaceLayoutStore>()(
     persist(
       (set, get) => ({
@@ -2374,6 +2387,11 @@ export function createWorkspaceLayoutStore(
         migrate: (persistedState, version) =>
           migrateWorkspaceLayoutPersistedState(persistedState, version, ids),
         partialize: createPersistedStateProjection(),
+        // Set after the first read, a failed one too, so a later follow merges workspace by
+        // workspace (ALM-5115).
+        onRehydrateStorage: () => () => {
+          restored = true;
+        },
         merge: followOtherWindowsLayout(
           () => otherWindowsWrites,
           (persistedState, currentState) => {
@@ -2433,7 +2451,7 @@ export function createWorkspaceLayoutStore(
       },
     ),
   );
-  otherWindowsWrites = followOtherWindowsWritesByKey(store, otherWindowsSource);
+  otherWindowsWrites = followOtherWindowsWritesByKey(store, otherWindowsSource, () => restored);
   return store;
 }
 

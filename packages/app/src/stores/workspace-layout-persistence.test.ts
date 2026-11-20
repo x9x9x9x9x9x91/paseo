@@ -238,9 +238,9 @@ it("takes in only the workspace another app window changed and keeps that change
   openAgent(windowB, shown, "agent-b1");
   await settle();
   await windowA.persist.rehydrate();
-  const openInAFollowedByB = async (agentId: string) => {
+  const openInAFollowedByB = async (agentId: string, workspaceKey = other) => {
     const beforeA = values.get("workspace-layout-state") ?? null;
-    openAgent(windowA, other, agentId);
+    openAgent(windowA, workspaceKey, agentId);
     await settle();
     for (const listener of listeners) {
       listener({
@@ -251,10 +251,11 @@ it("takes in only the workspace another app window changed and keeps that change
     }
     await settle();
   };
-  // A's first write after reading B's workspace adds the explorer pane id B never stored, so B
-  // takes that workspace in once; from then on both store it alike.
-  await openInAFollowedByB("agent-a2");
+  // A read B's workspace in, which fills in the explorer pane id B never stored, so A's next
+  // write changes B's entry without changing B's layout: B keeps its own.
   const layoutShownInB = windowB.getState().layoutByWorkspace[shown];
+  await openInAFollowedByB("agent-a2");
+  expect(windowB.getState().layoutByWorkspace[shown]).toBe(layoutShownInB);
 
   await openInAFollowedByB("agent-a3");
 
@@ -271,4 +272,9 @@ it("takes in only the workspace another app window changed and keeps that change
   await reopened.persist.rehydrate();
   expect(agentIdsOf(reopened, other)).toEqual(["agent-a1", "agent-a2", "agent-a3"]);
   expect(agentIdsOf(reopened, shown)).toEqual(["agent-b1", "agent-b2"]);
+
+  // A real change to B's workspace from A is still taken in.
+  await windowA.persist.rehydrate();
+  await openInAFollowedByB("agent-a4", shown);
+  expect(agentIdsOf(windowB, shown)).toEqual(["agent-b1", "agent-b2", "agent-a4"]);
 });
