@@ -9,8 +9,8 @@ import {
 import { getAttachmentStore } from "@/attachments/store";
 import type { AttachmentMetadata, SaveAttachmentInput } from "@/attachments/types";
 
-// A save's id reaches its holder (a draft, a screenshot) only after the save returns; another
-// window's sweep in that gap still keeps it (ALM-5125).
+// A save's id reaches its holder (a draft, a screenshot) only after the save returns; a sweep in
+// that gap, this window's or another's, still keeps it (ALM-5125).
 const RECENT_PERSISTENCE_MS = 30_000;
 
 const activePersistence = new Set<Promise<AttachmentMetadata>>();
@@ -49,7 +49,7 @@ export function startAnsweringOtherWindowSweeps(): void {
 /** Test-only hook: this module instance speaks on the given channel, as one app window. */
 export function __useOtherWindowChannelForTests(
   channel: HoldChannel | null,
-  options: { windowId?: string; replyTimeoutMs?: number } = {},
+  options: { windowId?: string; replyTimeoutMs?: number; discoveryMs?: number } = {},
 ): void {
   otherWindowHolds = channel
     ? createOtherWindowHolds({ channel, holdForPeerSweep, ...options })
@@ -123,7 +123,9 @@ async function persistAttachment(input: SaveAttachmentInput): Promise<Attachment
   const pending = (async () => {
     const store = await getAttachmentStore();
     const attachment = await store.save(input);
-    recentlyPersisted.set(attachment.id, Date.now());
+    const persistedAt = Date.now();
+    collectRecentlyPersistedIds(persistedAt);
+    recentlyPersisted.set(attachment.id, persistedAt);
     if (pendingGarbageCollections > 0) {
       persistedDuringGarbageCollection.add(attachment.id);
     }
@@ -265,29 +267,43 @@ export async function deleteAttachments(
 export async function garbageCollectAttachments(input: {
   referencedIds: ReadonlySet<string>;
 }): Promise<void> {
+  const holds = getOtherWindowHolds();
+  // Before this window holds its own saves: a start-up sweep first learns the open windows.
+  await holds.whenDiscovered();
   const releaseHold = beginPersistenceHold();
 
   const previousGarbageCollection = garbageCollectionTail;
   const currentGarbageCollection = (async () => {
     await previousGarbageCollection;
     await waitForActivePersistence();
-    const otherWindows = await getOtherWindowHolds().beginSweep();
+    const otherWindows = await holds.beginSweep();
     if (!otherWindows) {
       console.warn("[attachments] Skipped a sweep: another app window did not say what it holds");
       return;
     }
     try {
+      // Read again now, as the caller's ids may predate the waits above.
       const referencedIds = new Set(input.referencedIds);
+      for (const id of collectWindowAttachmentIds()) {
+        referencedIds.add(id);
+      }
       for (const id of collectRetainedAttachmentIds()) {
         referencedIds.add(id);
       }
       for (const id of persistedDuringGarbageCollection) {
         referencedIds.add(id);
       }
+      for (const id of collectRecentlyPersistedIds(Date.now())) {
+        referencedIds.add(id);
+      }
       for (const id of otherWindows.heldIds) {
         referencedIds.add(id);
       }
       const store = await getAttachmentStore();
+      if (!otherWindows.isHeld()) {
+        console.warn("[attachments] Skipped a sweep: the other app windows' hold ran out");
+        return;
+      }
       await store.garbageCollect({ referencedIds });
     } finally {
       otherWindows.finish();

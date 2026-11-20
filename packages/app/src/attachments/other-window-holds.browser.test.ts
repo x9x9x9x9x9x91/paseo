@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { persistAttachmentFromDataUrl } from "@/attachments/service";
+import { getAttachmentStore } from "@/attachments/store";
 import {
   resetWorkspaceAttachmentsStore,
   useWorkspaceAttachmentsStore,
@@ -47,7 +48,12 @@ describe("attachment holds across app windows", () => {
   });
 
   it("names a browser element's screenshot held only in this window when another window sweeps", async () => {
-    const screenshot = await persistAttachmentFromDataUrl({ dataUrl: PNG, mimeType: "image/png" });
+    // Saved past the service, so only the workspace store names it, not the recent saves.
+    const store = await getAttachmentStore();
+    const screenshot = await store.save({
+      source: { kind: "data_url", dataUrl: PNG },
+      mimeType: "image/png",
+    });
     useWorkspaceAttachmentsStore.getState().addWorkspaceAttachment({
       scopeKey: "workspace:test",
       attachment: {

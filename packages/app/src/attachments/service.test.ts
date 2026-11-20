@@ -138,6 +138,7 @@ describe("attachment service", () => {
       await Promise.all([persist, collect]);
     }
 
-    expect(garbageCollections).toEqual([["assistant-preview"]]);
+    expect(garbageCollections).toHaveLength(1);
+    expect(garbageCollections[0]).toContain("assistant-preview");
   });
 });

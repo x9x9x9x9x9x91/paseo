@@ -31,15 +31,26 @@ function readMessage(data: unknown): HoldMessage | null {
 export interface OtherWindowSweep {
   /** Every attachment id another open window holds, read before this window deletes anything. */
   heldIds: ReadonlySet<string>;
+  /**
+   * Whether the other windows still hold their saves, so a sweep that lists the store now sees
+   * none of theirs it was not told of. False once half their hold has passed.
+   */
+  isHeld(): boolean;
   /** Lets the other windows save again. Call it once the store's sweep has ended. */
   finish(): void;
 }
 
 export interface OtherWindowHolds {
   /**
+   * Resolves once the windows already open have had time to say so after this one's hello, so
+   * a start-up sweep does not run before it knows them. Await it before holding any save.
+   */
+  whenDiscovered(): Promise<void>;
+  /**
    * Asks every other open window for the attachments it holds and has them hold their saves
    * until `finish`. Resolves null when a window did not answer in time: the sweep is skipped,
-   * and that window is forgotten until it speaks again.
+   * and that window is forgotten only if it has still said nothing by the next sweep, so a slow
+   * window is waited for again and a gone one costs one skipped sweep.
    */
   beginSweep(): Promise<OtherWindowSweep | null>;
 }
@@ -66,12 +77,14 @@ export function createOtherWindowHolds(params: {
   windowId?: string;
   replyTimeoutMs?: number;
   holdTimeoutMs?: number;
+  discoveryMs?: number;
 }): OtherWindowHolds {
   const { channel } = params;
   if (!channel) {
     return {
+      async whenDiscovered() {},
       async beginSweep() {
-        return { heldIds: new Set(), finish: () => {} };
+        return { heldIds: new Set(), isHeld: () => true, finish: () => {} };
       },
     };
   }
@@ -80,7 +93,10 @@ export function createOtherWindowHolds(params: {
     params.windowId ?? `window_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
   const replyTimeoutMs = params.replyTimeoutMs ?? 3000;
   const holdTimeoutMs = params.holdTimeoutMs ?? 10_000;
+  const discoveryMs = params.discoveryMs ?? replyTimeoutMs;
   const peers = new Set<string>();
+  // Peers that missed a request and have said nothing since.
+  const silentPeers = new Set<string>();
   const pendingSweeps = new Map<string, PendingSweep>();
   const activeSweepIds = new Set<string>();
   const heldForPeers = new Map<string, () => void>();
@@ -101,7 +117,9 @@ export function createOtherWindowHolds(params: {
     heldForPeers.set(key, () => {});
     const hold = await params.holdForPeerSweep();
     if (!heldForPeers.has(key)) {
+      // The sweep gave up on this window first; saying so keeps it known for the next one.
       hold.release();
+      post({ type: "here", from: windowId });
       return;
     }
     const timer = setTimeout(() => releasePeerHold(key), holdTimeoutMs);
@@ -125,6 +143,7 @@ export function createOtherWindowHolds(params: {
   channel.addEventListener("message", (event) => {
     const message = readMessage(event.data);
     if (!message || message.from === windowId) return;
+    silentPeers.delete(message.from);
     switch (message.type) {
       case "hello":
         peers.add(message.from);
@@ -169,9 +188,15 @@ export function createOtherWindowHolds(params: {
   });
 
   post({ type: "hello", from: windowId });
+  const discovered = new Promise<void>((resolve) => {
+    setTimeout(resolve, discoveryMs);
+  });
 
   return {
+    whenDiscovered: () => discovered,
     async beginSweep() {
+      for (const peerId of silentPeers) peers.delete(peerId);
+      silentPeers.clear();
       sweepCounter += 1;
       const sweepId = `${windowId}:${sweepCounter}`;
       activeSweepIds.add(sweepId);
@@ -180,7 +205,7 @@ export function createOtherWindowHolds(params: {
         post({ type: "done", from: windowId, sweepId });
       };
       if (peers.size === 0) {
-        return { heldIds: new Set(), finish };
+        return { heldIds: new Set(), isHeld: () => true, finish };
       }
 
       const waitingOn = new Set(peers);
@@ -191,17 +216,19 @@ export function createOtherWindowHolds(params: {
       });
       const timer = setTimeout(() => settle(), replyTimeoutMs);
       pendingSweeps.set(sweepId, { waitingOn, heldIds, settle: () => settle() });
+      const requestedAt = Date.now();
       post({ type: "request", from: windowId, sweepId });
       await answered;
       clearTimeout(timer);
       pendingSweeps.delete(sweepId);
 
       if (waitingOn.size > 0) {
-        for (const peerId of waitingOn) peers.delete(peerId);
+        for (const peerId of waitingOn) silentPeers.add(peerId);
         finish();
         return null;
       }
-      return { heldIds, finish };
+      const isHeld = () => Date.now() - requestedAt < holdTimeoutMs / 2;
+      return { heldIds, isHeld, finish };
     },
   };
 }

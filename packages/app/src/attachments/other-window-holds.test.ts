@@ -46,9 +46,11 @@ function createSharedStore(initialIds: string[]) {
   const ids = new Set(initialIds);
   const saves: string[] = [];
   let sweepGate: Promise<void> = Promise.resolve();
+  let saveGate: Promise<void> = Promise.resolve();
   const store: AttachmentStore = {
     storageType: "web-indexeddb",
     async save(input) {
+      await saveGate;
       const id = input.id ?? `generated_${saves.length}`;
       saves.push(id);
       ids.add(id);
@@ -74,6 +76,13 @@ function createSharedStore(initialIds: string[]) {
     store,
     ids,
     saves,
+    gateSaves(): () => void {
+      let open: () => void = () => undefined;
+      saveGate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return open;
+    },
     gateSweeps(): () => void {
       let open: () => void = () => undefined;
       sweepGate = new Promise<void>((resolve) => {
@@ -88,13 +97,13 @@ function createSharedStore(initialIds: string[]) {
 async function openWindow(
   channel: HoldChannel,
   store: AttachmentStore,
-  options: { replyTimeoutMs?: number } = {},
+  options: { replyTimeoutMs?: number; discoveryMs?: number } = {},
 ): Promise<ServiceModule> {
   vi.resetModules();
   const service = await import("./service");
   const storeModule = await import("./store");
   storeModule.__setAttachmentStoreForTests(store);
-  service.__useOtherWindowChannelForTests(channel, options);
+  service.__useOtherWindowChannelForTests(channel, { discoveryMs: 20, ...options });
   return service;
 }
 
@@ -122,6 +131,18 @@ describe("attachment sweeps across app windows", () => {
     expect(Array.from(shared.ids)).toEqual(["screenshot"]);
   });
 
+  it("keeps what an open window holds in a newly opened window's start-up sweep", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
   it("keeps an attachment another window saved before it holds it anywhere", async () => {
     const bus = createBus();
     const shared = createSharedStore([]);
@@ -140,7 +161,8 @@ describe("attachment sweeps across app windows", () => {
     const shared = createSharedStore([]);
     const windowA = await openWindow(bus.channel(), shared.store);
     const windowB = await openWindow(bus.channel(), shared.store);
-    await settle();
+    // Past B's discovery wait, so B's request is out before A saves.
+    await settle(30);
     const openSweep = shared.gateSweeps();
 
     const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
@@ -169,6 +191,28 @@ describe("attachment sweeps across app windows", () => {
 
     await windowB.garbageCollectAttachments({ referencedIds: new Set() });
     expect(Array.from(shared.ids)).toEqual([]);
+  });
+
+  it("waits again for a window that answered late instead of forgetting it", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 30 });
+    await settle();
+    // A answers only once its save under way ends, past B's wait.
+    const openSave = shared.gateSaves();
+    const save = windowA.persistAttachmentFromBytes({ id: "large", ...bytes });
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual(["screenshot", "orphan"]);
+    openSave();
+    await save;
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids).toSorted()).toEqual(["large", "screenshot"]);
   });
 
   it("does not wait on a window that has closed", async () => {
