@@ -12,7 +12,7 @@ interface WorkspaceServiceRoutePreferencesState {
 }
 
 const WorkspaceScriptLinkKindSchema = z.enum(["public", "paseo", "direct"]);
-const WorkspaceServiceRoutePreferencesSchema = z.strictObject({
+const WorkspaceServiceRoutePreferencesSchema = z.object({
   byServerId: z.record(z.string(), WorkspaceScriptLinkKindSchema),
 });
 
