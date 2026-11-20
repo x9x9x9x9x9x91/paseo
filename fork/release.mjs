@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 // The fork's release job. Upstream's latest stable release plus this branch's own commits,
 // checked, built, signed, notarized and published as a GitHub release on the fork, so the
-// Mac app updates itself from there. It runs hourly on the signing Mac: on sincoder as a launch
-// agent in the logged-in session, whose keychain holds the Developer ID key and the notary
-// profile, or on mini1's agent account as a timed job that holds no key and has the release
-// account's program sign and notarize (RELEASE_PROGRAM, ALM-4279). Nothing builds on the signing
-// Mac: the checks, the build and the packaged-app smoke run on a test Mac over ssh
-// (`--build-host`, the same file), and the signing Mac keeps what needs its keys and logins: git
-// and GitHub, the conflict agent, signing, notarizing and publishing.
+// Mac app updates itself from there. It runs hourly on the signing Mac, mini1, as its agent
+// account's timed job, which holds no key and has the release account's program sign and
+// notarize (RELEASE_PROGRAM, ALM-4279). Nothing builds on the signing Mac: the checks, the build
+// and the packaged-app smoke run on a test Mac over ssh (`--build-host`, the same file), and the
+// signing Mac keeps what needs its keys and logins: git and GitHub, the conflict agent, signing,
+// notarizing and publishing.
 // fork/README.md has the version scheme, the failure policy and the retirement path.
 import { spawnSync } from "node:child_process";
 import {
@@ -192,7 +191,7 @@ const NOTARY_PROFILE = process.env.PASEO_FORK_NOTARY_PROFILE ?? "substrate-notar
 // Where the keys sit in an account of their own (mini1's release account, ALM-4593), the words
 // that run its program, split on whitespace: its `sign` takes the unsigned app with its plan and
 // hands it back signed, notarized and stapled, its `notary-check` asks the notary as
-// notaryRefusal does (ALM-4279). None where this Mac's own keychain signs (sincoder).
+// notaryRefusal does (ALM-4279). None where the running account's own keychain signs.
 export const RELEASE_PROGRAM = (process.env.PASEO_FORK_RELEASE_PROGRAM ?? "")
   .split(/\s+/)
   .filter(Boolean);
@@ -1488,14 +1487,14 @@ function signHere({ version, owner, runDir }) {
 /**
  * The release program's `sign` with the zip `sent` on its stdin and its stdout in `back`, its
  * progress in `logFile`. Its busy exit (PROGRAM_BUSY) is HostAway, tried next hour. A failure is
- * read from the program's own last words as sincoder's steps read theirs: Apple's Invalid or
- * Rejected verdict is notarize's and the candidate's; Apple taking nothing with no verdict is
- * notarize's and outside, unless `refusal` (notaryRefusal) finds the profile refused now, a hold
- * for Tim's step (NotaryRefused), since the program drops notarytool's own error; a ticket that
- * did not staple is notarize's and outside, as sincoder's stapler is; Gatekeeper or codesign
- * refusing the signed app is verify's; the program's pinned osx-sign not the build's, said by the
- * plan's own line anywhere in the log, is signer's, whose fix is the program's pin in Alma's repo;
- * any other failure the sign step's (ALM-4279).
+ * read from the program's own last words as the keychain path's steps read theirs: Apple's
+ * Invalid or Rejected verdict is notarize's and the candidate's; Apple taking nothing with no
+ * verdict is notarize's and outside, unless `refusal` (notaryRefusal) finds the profile refused
+ * now, a hold for Tim's step (NotaryRefused), since the program drops notarytool's own error; a
+ * ticket that did not staple is notarize's and outside, as the keychain path's stapler is;
+ * Gatekeeper or codesign refusing the signed app is verify's; the program's pinned osx-sign not
+ * the build's, said by the plan's own line anywhere in the log, is signer's, whose fix is the
+ * program's pin in Alma's repo; any other failure the sign step's (ALM-4279).
  */
 export function signedBy({
   program,
