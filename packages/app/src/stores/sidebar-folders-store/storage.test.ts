@@ -110,7 +110,9 @@ describe("sidebar folders storage", () => {
       state: { ...ticked, landingFolderId: null, knownProjectKeys: [] },
       version: 0,
     });
-    expect(OlderBuildEnvelopeSchema.safeParse(stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY)).success).toBe(true);
+    expect(
+      OlderBuildEnvelopeSchema.safeParse(stored(backing, SIDEBAR_FOLDERS_STORAGE_KEY)).success,
+    ).toBe(true);
     expect(stored(backing, SIDEBAR_FOLDER_LANDING_STORAGE_KEY)).toEqual(unticked);
   });
 
