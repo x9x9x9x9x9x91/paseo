@@ -11,7 +11,7 @@ function renameLegacyFeatureValues(value: unknown): unknown {
 
 const WorkspaceDraftTabSetupStorageSchema = z.preprocess(
   renameLegacyFeatureValues,
-  z.strictObject({
+  z.object({
     provider: z.string(),
     cwd: z.string(),
     modeId: z.string().nullable(),
@@ -22,30 +22,30 @@ const WorkspaceDraftTabSetupStorageSchema = z.preprocess(
   }),
 );
 const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("new_tab") }),
-  z.strictObject({
+  z.object({ kind: z.literal("new_tab") }),
+  z.object({
     kind: z.literal("draft"),
     draftId: z.string(),
     setup: WorkspaceDraftTabSetupStorageSchema.optional(),
   }),
-  z.strictObject({ kind: z.literal("agent"), agentId: z.string() }),
-  z.strictObject({
+  z.object({ kind: z.literal("agent"), agentId: z.string() }),
+  z.object({
     kind: z.literal("provider_subagent"),
     parentAgentId: z.string(),
     subagentId: z.string(),
   }),
-  z.strictObject({ kind: z.literal("terminal"), terminalId: z.string() }),
-  z.strictObject({ kind: z.literal("browser"), browserId: z.string() }),
-  z.strictObject({ kind: z.literal("changes_tree") }),
-  z.strictObject({ kind: z.literal("files") }),
-  z.strictObject({ kind: z.literal("pull_request") }),
-  z.strictObject({
+  z.object({ kind: z.literal("terminal"), terminalId: z.string() }),
+  z.object({ kind: z.literal("browser"), browserId: z.string() }),
+  z.object({ kind: z.literal("changes_tree") }),
+  z.object({ kind: z.literal("files") }),
+  z.object({ kind: z.literal("pull_request") }),
+  z.object({
     kind: z.literal("file"),
     path: z.string(),
     lineStart: z.number().int().positive().optional(),
     lineEnd: z.number().int().positive().optional(),
   }),
-  z.strictObject({
+  z.object({
     kind: z.literal("working_diff"),
     focusPath: z.string().optional(),
     focusRequestId: z.number().optional(),
@@ -54,16 +54,16 @@ const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
     baseRef: z.string().nullable().optional(),
     ignoreWhitespace: z.boolean().optional(),
   }),
-  z.strictObject({ kind: z.literal("setup"), workspaceId: z.string() }),
-  z.strictObject({ kind: z.literal("commit_diff"), sha: z.string() }),
+  z.object({ kind: z.literal("setup"), workspaceId: z.string() }),
+  z.object({ kind: z.literal("commit_diff"), sha: z.string() }),
   z.discriminatedUnion("context", [
-    z.strictObject({
+    z.object({
       kind: z.literal("plugin"),
       pluginId: z.string(),
       panelId: z.string(),
       context: z.literal("workspace"),
     }),
-    z.strictObject({
+    z.object({
       kind: z.literal("plugin"),
       pluginId: z.string(),
       panelId: z.string(),
@@ -72,7 +72,7 @@ const WorkspaceTabTargetStorageSchema = z.discriminatedUnion("kind", [
     }),
   ]),
 ]);
-const WorkspaceTabStorageSchema = z.strictObject({
+const WorkspaceTabStorageSchema = z.object({
   tabId: z.string(),
   target: WorkspaceTabTargetStorageSchema,
   createdAt: z.number(),
@@ -80,9 +80,9 @@ const WorkspaceTabStorageSchema = z.strictObject({
 });
 const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
   z.discriminatedUnion("kind", [
-    z.strictObject({
+    z.object({
       kind: z.literal("pane"),
-      pane: z.strictObject({
+      pane: z.object({
         id: z.string(),
         tabIds: z.array(z.string()),
         focusedTabId: z.string().nullable(),
@@ -90,9 +90,9 @@ const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
         hidden: z.boolean().optional(),
       }),
     }),
-    z.strictObject({
+    z.object({
       kind: z.literal("group"),
-      group: z.strictObject({
+      group: z.object({
         id: z.string(),
         direction: z.enum(["horizontal", "vertical"]),
         children: z.array(SplitNodeStorageSchema),
@@ -101,12 +101,12 @@ const SplitNodeStorageSchema: z.ZodType<SplitNode> = z.lazy(() =>
     }),
   ]),
 );
-const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.strictObject({
+const WorkspaceLayoutStorageSchema: z.ZodType<WorkspaceLayout> = z.object({
   root: SplitNodeStorageSchema,
   focusedPaneId: z.string().nullable(),
   parentTabIdByTabId: z.record(z.string(), z.string()).optional(),
 });
-export const WorkspaceLayoutPersistedStateSchema = z.strictObject({
+export const WorkspaceLayoutPersistedStateSchema = z.object({
   pinnedAgentIdsByWorkspace: z.record(z.string(), z.array(z.string())).optional(),
   layoutByWorkspace: z.record(z.string(), WorkspaceLayoutStorageSchema),
   splitSizesByWorkspace: z.record(z.string(), z.record(z.string(), z.array(z.number()))).optional(),
@@ -115,8 +115,8 @@ export const WorkspaceLayoutPersistedStateSchema = z.strictObject({
   explorerSidebarRatioByWorkspace: z.record(z.string(), z.number()).optional(),
   // COMPAT(explorerSidebarNaming): accepted from builds that called this dock the Side panel.
   sidePanelRatioByWorkspace: z.record(z.string(), z.number()).optional(),
-  // The persisted keys keep their pre-rename spelling: the schema is strict, so a
-  // rename here would fail every existing blob and wipe the layout it describes.
+  // The persisted keys keep their pre-rename spelling: a rename here would drop what
+  // every existing blob stored under the old one.
   explorerPaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),
   explorerSidebarPaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),
   sidePaneIdByWorkspace: z.record(z.string(), z.string().nullable()).optional(),

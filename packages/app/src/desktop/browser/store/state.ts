@@ -29,8 +29,8 @@ export interface BrowserIndexState {
 }
 
 const BrowserViewportSchema = z.discriminatedUnion("mode", [
-  z.strictObject({ mode: z.literal("responsive") }),
-  z.strictObject({
+  z.object({ mode: z.literal("responsive") }),
+  z.object({
     mode: z.literal("fixed"),
     width: z.number().positive(),
     height: z.number().positive(),
@@ -39,7 +39,7 @@ const BrowserViewportSchema = z.discriminatedUnion("mode", [
 
 const BrowserRoutingModeSchema = z.enum(["host", "local"]);
 
-const BrowserRecordSchema = z.strictObject({
+const BrowserRecordSchema = z.object({
   browserId: z.string(),
   url: z.string(),
   title: z.string(),
@@ -53,7 +53,7 @@ const BrowserRecordSchema = z.strictObject({
   createdAt: z.number(),
 });
 
-export const BrowserIndexStateSchema: z.ZodType<BrowserIndexState> = z.strictObject({
+export const BrowserIndexStateSchema: z.ZodType<BrowserIndexState> = z.object({
   browsersById: z.record(z.string(), BrowserRecordSchema),
 });
 
