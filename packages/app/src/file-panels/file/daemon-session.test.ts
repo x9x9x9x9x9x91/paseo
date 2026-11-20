@@ -77,4 +77,23 @@ describe("daemon file session previews", () => {
     await vi.waitFor(() => expect(store.stored.has(id)).toBe(false));
     expect(store.releasedUrls).toEqual([preview.url]);
   });
+
+  it("keeps one preview's image when another of the same file, made in the same millisecond, closes", async () => {
+    const store = createKeepingStore();
+    __setAttachmentStoreForTests(store);
+    const now = vi.spyOn(Date, "now").mockReturnValue(1700000000000);
+    const input = { target, bytes: new Uint8Array([1, 2, 3, 4]), mimeType: "image/png" };
+    try {
+      const first = await session.createUrl(input);
+      const second = await session.createUrl(input);
+      expect(second.url).not.toBe(first.url);
+
+      first.release();
+      await vi.waitFor(() => expect(store.stored.size).toBe(1));
+      expect([...store.stored].map((id) => `file:///attachments/${id}`)).toEqual([second.url]);
+      second.release();
+    } finally {
+      now.mockRestore();
+    }
+  });
 });
