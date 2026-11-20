@@ -239,6 +239,8 @@ test.describe("Sidebar folders", () => {
         await page.getByTestId("sidebar-folder-take-out").click();
         await filterTo([second.projectKey, third.projectKey]);
         await expect(projectRow(third.projectKey)).toBeVisible();
+        // The filter is on: the unfiltered list has Workers above Second either way.
+        await expect(projectRow(first.projectKey)).toHaveCount(0);
         await expectAbove(folderRowNamed(page, "Workers"), projectRow(second.projectKey));
         await sidebar.screenshot({ path: testInfo.outputPath("regroup-1-taken-out.png") });
       });
@@ -251,6 +253,7 @@ test.describe("Sidebar folders", () => {
         await expect(folderRowNamed(page, "Lanes")).toHaveCount(1);
         await filterTo([third.projectKey, fourth.projectKey]);
         await expect(projectRow(fourth.projectKey)).toBeVisible();
+        await expect(projectRow(first.projectKey)).toHaveCount(0);
         await expectAbove(folderRowNamed(page, "Workers"), folderRowNamed(page, "Lanes"));
         await sidebar.screenshot({ path: testInfo.outputPath("regroup-2-new-folder.png") });
       });
