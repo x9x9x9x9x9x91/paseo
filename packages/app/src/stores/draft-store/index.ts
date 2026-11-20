@@ -7,6 +7,8 @@ import {
   garbageCollectAttachments,
   persistAttachmentFromDataUrl,
   persistAttachmentFromFileUri,
+  setWindowAttachmentIdsCollector,
+  startAnsweringOtherWindowSweeps,
 } from "@/attachments/service";
 import { collectRetainedAttachmentIds } from "@/attachments/gc-retention";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
@@ -170,6 +172,15 @@ async function runAttachmentGc(): Promise<void> {
     useDraftStore.setState({ drafts: prunedDrafts });
   }
 
+  try {
+    await garbageCollectAttachments({ referencedIds: collectWindowHeldAttachmentIds() });
+  } catch (error) {
+    console.warn("[DraftStore] Attachment garbage collection failed", error);
+  }
+}
+
+/** Every attachment this window holds in memory, kept by its own sweep and by other windows'. */
+function collectWindowHeldAttachmentIds(): Set<string> {
   const referencedIds = new Set<string>();
   for (const id of useDraftStore.getState().collectActiveAttachmentIds()) {
     referencedIds.add(id);
@@ -207,11 +218,7 @@ async function runAttachmentGc(): Promise<void> {
     }
   }
 
-  try {
-    await garbageCollectAttachments({ referencedIds });
-  } catch (error) {
-    console.warn("[DraftStore] Attachment garbage collection failed", error);
-  }
+  return referencedIds;
 }
 
 function collectQueuedMessageAttachmentIds(
@@ -510,8 +517,8 @@ export const useDraftStore = create<DraftStore>()(
         }),
       onRehydrateStorage: () => {
         return () => {
-          // Start-up only: reading in another window's write sweeps nothing, since this window
-          // cannot see the attachments the other one holds in memory alone (ALM-5115).
+          // Start-up only: reading in another window's write is no act of this window's, so it
+          // sweeps nothing (ALM-5115).
           if (draftsRestored) return;
           draftsRestored = true;
           void migrateAllLegacyDrafts();
@@ -534,3 +541,6 @@ otherWindowsDraftWrites = followOtherWindowsWritesByKey(
 useDraftStore.persist.onFinishHydration(() => {
   if (draftPersistStorage?.hasPending()) useDraftStore.setState({});
 });
+
+setWindowAttachmentIdsCollector(collectWindowHeldAttachmentIds);
+startAnsweringOtherWindowSweeps();
