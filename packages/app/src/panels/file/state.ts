@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-export const fileStateSchema = z.strictObject({
+// Loose, as `changesStateSchema` (ALM-5138).
+export const fileStateSchema = z.object({
   treeVisible: z.boolean(),
   treeWidth: z.number().optional(),
 });

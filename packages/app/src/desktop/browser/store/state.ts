@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readableRecordEntries } from "@/storage/validated-persist-storage";
 
 export type BrowserViewport =
   | { mode: "responsive" }
@@ -43,12 +44,15 @@ const BrowserRecordSchema = z.object({
   canGoForward: z.boolean(),
   faviconUrl: z.string().nullable(),
   lastError: z.string().nullable(),
-  viewport: BrowserViewportSchema.optional().default(RESPONSIVE_BROWSER_VIEWPORT),
+  // A viewport mode a later build adds reads as responsive (ALM-5138).
+  viewport: BrowserViewportSchema.optional()
+    .default(RESPONSIVE_BROWSER_VIEWPORT)
+    .catch(RESPONSIVE_BROWSER_VIEWPORT),
   createdAt: z.number(),
 });
 
 export const BrowserIndexStateSchema: z.ZodType<BrowserIndexState> = z.object({
-  browsersById: z.record(z.string(), BrowserRecordSchema),
+  browsersById: readableRecordEntries(BrowserRecordSchema),
 });
 
 export function createFixedBrowserViewport(width: number, height: number): BrowserViewport {
