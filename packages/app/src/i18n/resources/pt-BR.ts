@@ -1344,6 +1344,17 @@ export const ptBR: TranslationResources = {
         "Adicione comandos de configuração para que novos worktrees instalem dependências e se preparem automaticamente.",
       openProjectSettings: "Abrir configurações do projeto",
     },
+    folder: {
+      menu: "Ações da pasta",
+      moveTo: "Mover para pasta",
+      takeOut: "Tirar da pasta",
+      create: "Nova pasta…",
+      createConfirm: "Criar pasta",
+      name: "Nome da pasta",
+      rename: "Renomear pasta",
+      renameConfirm: "Renomear",
+      remove: "Remover pasta",
+    },
     project: {
       actions: {
         menu: "Ações do projeto",
