@@ -1,0 +1,497 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { HoldChannel, WindowCloseSource } from "@/attachments/other-window-holds";
+import type { AttachmentMetadata, AttachmentStore } from "@/attachments/types";
+
+type ServiceModule = typeof import("./service");
+
+interface BusEnd {
+  listeners: Set<(event: { data: unknown }) => void>;
+  /** A page in the back-forward cache: nothing reaches it. */
+  frozen: boolean;
+}
+
+/** One origin's BroadcastChannel: a message reaches every other channel on the bus, later. */
+function createBus() {
+  const ends = new Set<BusEnd>();
+  return {
+    channel(): HoldChannel & { freeze(frozen: boolean): void } {
+      const end: BusEnd = { listeners: new Set(), frozen: false };
+      ends.add(end);
+      return {
+        send(message) {
+          const data = structuredClone(message);
+          for (const other of ends) {
+            if (other === end) continue;
+            setTimeout(() => {
+              if (other.frozen) return;
+              for (const listener of other.listeners) listener({ data });
+            }, 0);
+          }
+        },
+        addEventListener(_type, listener) {
+          end.listeners.add(listener);
+        },
+        freeze(frozen) {
+          end.frozen = frozen;
+        },
+      };
+    },
+  };
+}
+
+function createPageEvents() {
+  const hideListeners: Array<() => void> = [];
+  const showListeners: Array<(restored: boolean) => void> = [];
+  const resumeListeners: Array<() => void> = [];
+  return {
+    onResume(listener: () => void) {
+      resumeListeners.push(listener);
+    },
+    resume() {
+      for (const listener of resumeListeners) listener();
+    },
+    onPageHide(listener: () => void) {
+      hideListeners.push(listener);
+    },
+    onPageShow(listener: (restored: boolean) => void) {
+      showListeners.push(listener);
+    },
+    hide() {
+      for (const listener of hideListeners) listener();
+    },
+    show(restored: boolean) {
+      for (const listener of showListeners) listener(restored);
+    },
+  };
+}
+
+function createAttachment(id: string): AttachmentMetadata {
+  return {
+    id,
+    mimeType: "image/png",
+    storageType: "web-indexeddb",
+    storageKey: id,
+    fileName: null,
+    byteSize: 3,
+    createdAt: 1700000000000,
+  };
+}
+
+/** The store every window shares; a sweep lists it only once `sweepGate` opens. */
+function createSharedStore(initialIds: string[]) {
+  const ids = new Set(initialIds);
+  const saves: string[] = [];
+  let sweepGate: Promise<void> = Promise.resolve();
+  let saveGate: Promise<void> = Promise.resolve();
+  const store: AttachmentStore = {
+    storageType: "web-indexeddb",
+    async save(input) {
+      await saveGate;
+      const id = input.id ?? `generated_${saves.length}`;
+      saves.push(id);
+      ids.add(id);
+      return createAttachment(id);
+    },
+    async encodeBase64({ attachment }) {
+      return attachment.id;
+    },
+    async resolvePreviewUrl({ attachment }) {
+      return `blob:${attachment.id}`;
+    },
+    async delete({ attachment }) {
+      ids.delete(attachment.id);
+    },
+    async garbageCollect({ referencedIds }) {
+      await sweepGate;
+      for (const id of Array.from(ids)) {
+        if (!referencedIds.has(id)) ids.delete(id);
+      }
+    },
+  };
+  return {
+    store,
+    ids,
+    saves,
+    gateSaves(): () => void {
+      let open: () => void = () => undefined;
+      saveGate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return open;
+    },
+    gateSweeps(): () => void {
+      let open: () => void = () => undefined;
+      sweepGate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return open;
+    },
+  };
+}
+
+/** A fresh copy of the attachment service, as one app window loads it. */
+async function openWindow(
+  channel: HoldChannel,
+  store: AttachmentStore,
+  options: {
+    replyTimeoutMs?: number;
+    holdTimeoutMs?: number;
+    discoveryMs?: number;
+    closeSource?: WindowCloseSource;
+  } = {},
+): Promise<ServiceModule> {
+  vi.resetModules();
+  const service = await import("./service");
+  const storeModule = await import("./store");
+  storeModule.__setAttachmentStoreForTests(store);
+  service.__useOtherWindowChannelForTests(channel, { discoveryMs: 20, ...options });
+  return service;
+}
+
+function settle(ms = 5): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const bytes = { bytes: new Uint8Array([1, 2, 3]), mimeType: "image/png" };
+
+describe("attachment sweeps across app windows", () => {
+  afterEach(() => {
+    vi.resetModules();
+  });
+
+  it("keeps an attachment another window holds only in its memory", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("keeps what an open window holds in a newly opened window's start-up sweep", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("keeps an attachment another window saved before it holds it anywhere", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle();
+
+    await windowA.persistAttachmentFromBytes({ id: "picked", ...bytes });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["picked"]);
+  });
+
+  it("holds another window's save until the sweep has ended", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    // Past B's discovery wait, so B's request is out before A saves.
+    await settle(30);
+    const openSweep = shared.gateSweeps();
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle();
+    const save = windowA.persistAttachmentFromBytes({ id: "late", ...bytes });
+    await settle();
+    expect(shared.saves).toEqual([]);
+
+    openSweep();
+    await Promise.all([sweep, save]);
+
+    expect(shared.saves).toEqual(["late"]);
+    expect(Array.from(shared.ids)).toEqual(["late"]);
+  });
+
+  it("skips sweeps while another window does not answer, then forgets that window", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["orphan"]);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, {
+      replyTimeoutMs: 30,
+      holdTimeoutMs: 50,
+    });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual(["orphan"]);
+
+    // Two requests missed in a row and silent past the hold timeout: gone.
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual([]);
+  });
+
+  it("waits again for a window that answered late instead of forgetting it", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 30 });
+    await settle();
+    // A answers only once its save under way ends, past B's wait.
+    const openSave = shared.gateSaves();
+    const save = windowA.persistAttachmentFromBytes({ id: "large", ...bytes });
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual(["screenshot", "orphan"]);
+    // A sweep queued behind the first (a draft saved meanwhile) still waits for A.
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids)).toEqual(["screenshot", "orphan"]);
+    openSave();
+    await save;
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    expect(Array.from(shared.ids).toSorted()).toEqual(["large", "screenshot"]);
+  });
+
+  it("lets this window save while it waits on a window that does not answer", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 200 });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle(30);
+    let sweepEnded = false;
+
+    const sweep = (async () => {
+      await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+      sweepEnded = true;
+    })();
+    await settle();
+    await windowB.persistAttachmentFromBytes({ id: "pasted", ...bytes });
+
+    expect(sweepEnded).toBe(false);
+    await sweep;
+  });
+
+  it("lets the windows that answered save while it waits on one that does not", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowA = await openWindow(bus.channel(), shared.store);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 200 });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle(30);
+    let sweepEnded = false;
+
+    const sweep = (async () => {
+      await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+      sweepEnded = true;
+    })();
+    await settle();
+    await windowA.persistAttachmentFromBytes({ id: "pasted-in-a", ...bytes });
+
+    expect(sweepEnded).toBe(false);
+    await sweep;
+  });
+
+  it("learns a window opened while it was away before its next sweep", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["opened-meanwhile", "orphan"]);
+    const page = createPageEvents();
+    const channelA = bus.channel();
+    const windowA = await openWindow(channelA, shared.store, { closeSource: page });
+    await settle(30);
+
+    page.hide();
+    channelA.freeze(true);
+    const windowD = await openWindow(bus.channel(), shared.store);
+    windowD.setWindowAttachmentIdsCollector(() => ["opened-meanwhile"]);
+    await settle(30);
+    channelA.freeze(false);
+    page.show(true);
+    await windowA.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["opened-meanwhile"]);
+  });
+
+  it("is asked again once the browser runs it again after freezing it", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const page = createPageEvents();
+    const channelA = bus.channel();
+    const windowA = await openWindow(channelA, shared.store, { closeSource: page });
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const silentWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, {
+      replyTimeoutMs: 30,
+      holdTimeoutMs: 50,
+    });
+    silentWindow.send({ type: "hello", from: "silent" });
+    await settle(30);
+
+    // Frozen with no pagehide: B misses it twice, past the hold timeout, and drops it.
+    channelA.freeze(true);
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    await windowB.garbageCollectAttachments({ referencedIds: new Set(["screenshot"]) });
+    channelA.freeze(false);
+    page.resume();
+    await settle(30);
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("answers a sweep that opened while the sweep was still pinging", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 100 });
+    // Window C pongs only when the test says so, and replies to every request at once.
+    const windowC = bus.channel();
+    const seen: { ping?: { from: string; sweepId: string } } = {};
+    windowC.addEventListener("message", ({ data }) => {
+      const message = data as { type: string; from: string; sweepId: string };
+      if (message.type === "ping") seen.ping = message;
+      if (message.type === "request") {
+        windowC.send({
+          type: "reply",
+          from: "c",
+          to: message.from,
+          sweepId: message.sweepId,
+          ids: [],
+        });
+      }
+    });
+    windowC.send({ type: "hello", from: "c" });
+    await settle(30);
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle();
+    const windowA = await openWindow(bus.channel(), shared.store);
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    await settle();
+    if (!seen.ping) throw new Error("B did not ping");
+    windowC.send({ type: "pong", from: "c", to: seen.ping.from, sweepId: seen.ping.sweepId });
+    await sweep;
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("has a window opened while the only other window sweeps hold its saves", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle(30);
+    const openSweep = shared.gateSweeps();
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle();
+    const windowA = await openWindow(bus.channel(), shared.store);
+    await settle();
+    const save = windowA.persistAttachmentFromBytes({ id: "saved-in-new-window", ...bytes });
+    await settle();
+    expect(shared.saves).toEqual([]);
+    openSweep();
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids)).toEqual(["saved-in-new-window"]);
+  });
+
+  it("skips a lone sweep that reaches the store after a newcomer's hold could run out", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["orphan"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { holdTimeoutMs: 40 });
+    await settle(30);
+    // B's own save under way keeps it from listing the store past half the hold.
+    const openSave = shared.gateSaves();
+    const save = windowB.persistAttachmentFromBytes({ id: "large", ...bytes });
+    await settle();
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle(40);
+    openSave();
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids).toSorted()).toEqual(["large", "orphan"]);
+  });
+
+  it("has a window opened while the sweep asks hold its saves until the sweep ends", async () => {
+    const bus = createBus();
+    const shared = createSharedStore([]);
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 500 });
+    // Window C pongs at once and replies to a request only on the test's word.
+    const windowC = bus.channel();
+    const seen: { request?: { from: string; sweepId: string } } = {};
+    windowC.addEventListener("message", ({ data }) => {
+      const message = data as { type: string; from: string; sweepId: string };
+      if (message.type === "ping") {
+        windowC.send({ type: "pong", from: "c", to: message.from, sweepId: message.sweepId });
+      }
+      if (message.type === "request") seen.request = message;
+    });
+    windowC.send({ type: "hello", from: "c" });
+    await settle(30);
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle(10);
+    if (!seen.request) throw new Error("B did not ask");
+    const windowA = await openWindow(bus.channel(), shared.store);
+    await settle();
+    const save = windowA.persistAttachmentFromBytes({ id: "saved-in-new-window", ...bytes });
+    await settle();
+    windowC.send({
+      type: "reply",
+      from: "c",
+      to: seen.request.from,
+      sweepId: seen.request.sweepId,
+      ids: [],
+    });
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids)).toEqual(["saved-in-new-window"]);
+  });
+
+  it("is asked again once the browser shows it again after leaving", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["screenshot", "orphan"]);
+    const page = createPageEvents();
+    const windowA = await openWindow(bus.channel(), shared.store, { closeSource: page });
+    windowA.setWindowAttachmentIdsCollector(() => ["screenshot"]);
+    const windowB = await openWindow(bus.channel(), shared.store);
+    await settle(30);
+
+    page.hide();
+    await settle();
+    page.show(true);
+    await settle();
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual(["screenshot"]);
+  });
+
+  it("does not wait on a window that has closed", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["orphan"]);
+    const closedWindow = bus.channel();
+    const windowB = await openWindow(bus.channel(), shared.store, { replyTimeoutMs: 60_000 });
+    closedWindow.send({ type: "hello", from: "closed" });
+    await settle();
+    closedWindow.send({ type: "bye", from: "closed" });
+    await settle();
+
+    await windowB.garbageCollectAttachments({ referencedIds: new Set() });
+
+    expect(Array.from(shared.ids)).toEqual([]);
+  });
+});
