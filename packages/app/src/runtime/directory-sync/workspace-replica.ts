@@ -75,6 +75,7 @@ export class WorkspaceDirectoryReplica {
     this.replace(snapshot);
     const mutations = deltas.flatMap((delta) => this.applyDelta(delta));
     useSessionStore.getState().setHasHydratedWorkspaces(this.serverId, true);
+    useSessionStore.getState().setHasListedWorkspaces(this.serverId, true);
     return mutations;
   }
 

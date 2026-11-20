@@ -481,6 +481,11 @@ export interface SessionState {
   // Hydration status
   hasHydratedAgents: boolean;
   hasHydratedWorkspaces: boolean;
+  /**
+   * Set only by a full listing of the host's projects, never by a project the app registers
+   * itself: the landing folder reads which hosts' projects it has seen (ALM-5149).
+   */
+  hasListedWorkspaces: boolean;
   hasWorkspaceDirectorySnapshot: boolean;
 
   // Audio state
@@ -720,6 +725,7 @@ interface SessionStoreActions {
   // Hydration
   setHasHydratedAgents: (serverId: string, hydrated: boolean) => void;
   setHasHydratedWorkspaces: (serverId: string, hydrated: boolean) => void;
+  setHasListedWorkspaces: (serverId: string, listed: boolean) => void;
   setHasWorkspaceDirectorySnapshot: (serverId: string, available: boolean) => void;
 
   // Agent directory (derived from agents)
@@ -744,6 +750,7 @@ function createInitialSessionState(
     serverInfo: null,
     hasHydratedAgents: false,
     hasHydratedWorkspaces: false,
+    hasListedWorkspaces: false,
     hasWorkspaceDirectorySnapshot: false,
     isPlayingAudio: false,
     focusedAgentId: null,
@@ -2005,6 +2012,20 @@ export const useSessionStore = create<SessionStore>()(
             sessions: {
               ...prev.sessions,
               [serverId]: { ...session, hasHydratedWorkspaces: hydrated },
+            },
+          };
+        });
+      },
+
+      setHasListedWorkspaces: (serverId, listed) => {
+        set((prev) => {
+          const session = prev.sessions[serverId];
+          if (!session || session.hasListedWorkspaces === listed) return prev;
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [serverId]: { ...session, hasListedWorkspaces: listed },
             },
           };
         });
