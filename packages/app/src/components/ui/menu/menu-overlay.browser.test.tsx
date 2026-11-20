@@ -3,14 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { Text, View } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import {
-  MenuItem,
-  MenuRoot,
-  MenuSurface,
-  MenuTextField,
-  MenuTrigger,
-  type Size,
-} from "./index";
+import { MenuItem, MenuRoot, MenuSurface, MenuTextField, MenuTrigger, type Size } from "./index";
 
 // App sources compile against the classic JSX runtime, which expects React on the global.
 beforeEach(() => vi.stubGlobal("React", React));
@@ -137,17 +130,26 @@ describe("menu text field keys on web", () => {
     await page.viewport(1280, 900);
   });
 
-  function mountMenuWithField(): HTMLInputElement {
+  /** Opens a menu holding a name field above a row, and gives the placed field focus. */
+  async function focusFieldInPlacedMenu(): Promise<HTMLInputElement> {
     mountMenuAbovePill(
       <>
-        <MenuTextField initialValue="Workers" onChangeText={noop} placeholder="Name" testID="field" />
+        <MenuTextField
+          initialValue="Workers"
+          onChangeText={noop}
+          placeholder="Name"
+          testID="field"
+        />
         <MenuItem onSelect={noop} testID="confirm">
           Rename
         </MenuItem>
       </>,
     );
+    await wait(SETTLE_MS);
     const field = element("field");
     if (!(field instanceof HTMLInputElement)) throw new Error("field is not an input");
+    field.focus();
+    expect(document.activeElement).toBe(field);
     return field;
   }
 
@@ -156,9 +158,7 @@ describe("menu text field keys on web", () => {
   // The caret's landing differs by platform (macOS binds Home/End to scrolling), so the check is
   // that the field got the key unprevented and kept focus.
   it.each(["Home", "End"])("leaves %s to the focused field", async (key) => {
-    const field = mountMenuWithField();
-    await wait(SETTLE_MS);
-    field.focus();
+    const field = await focusFieldInPlacedMenu();
     const reached: boolean[] = [];
     field.addEventListener("keydown", (event) => reached.push(event.defaultPrevented));
 
@@ -169,9 +169,7 @@ describe("menu text field keys on web", () => {
   });
 
   it("moves from the field to the rows on ArrowDown", async () => {
-    const field = mountMenuWithField();
-    await wait(SETTLE_MS);
-    field.focus();
+    await focusFieldInPlacedMenu();
 
     await userEvent.keyboard("{ArrowDown}");
 
