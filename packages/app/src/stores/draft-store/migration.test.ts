@@ -140,6 +140,27 @@ describe("draft-store migration", () => {
     expect(backing.values.has("paseo-drafts")).toBe(true);
   });
 
+  it("keeps every draft when a later build stored keys this one does not know", async () => {
+    const backing = createMemoryStorage();
+    const laterState = {
+      drafts: { "draft:later": { ...activeDraft("still here", 5), pinned: true } },
+      createModalDraft: null,
+      sentLog: [],
+    };
+    const raw = JSON.stringify({ state: laterState, version: 4 });
+    backing.values.set("paseo-drafts", raw);
+    const storage = createValidatedPersistStorage(backing, PersistedDraftStoreSchema);
+
+    const stored = await storage.getItem("paseo-drafts");
+    const migrated = await migratePersistedState(stored?.state, {
+      migrateLegacyImages: passThroughMigrateLegacyImages,
+      nowMs: 6,
+    });
+
+    expect(migrated.drafts["draft:later"]?.input.text).toBe("still here");
+    expect(backing.values.get("paseo-drafts")).toBe(raw);
+  });
+
   it("promotes the newest legacy New Workspace draft into the singleton surface", async () => {
     const forkDraft = activeDraft("fork context", 1700000000003);
     const agentDraft = activeDraft("agent prompt", 1700000000004);

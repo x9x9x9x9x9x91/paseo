@@ -19,17 +19,12 @@ class MemoryStorage implements StateStorage {
   }
 }
 
-const StateSchema = z.strictObject({ enabled: z.boolean() });
+const StateSchema = z.object({ enabled: z.boolean() });
 
 describe("createValidatedPersistStorage", () => {
   it.each([
     ["malformed JSON", "{"],
     ["invalid state", JSON.stringify({ state: { enabled: "yes" }, version: 1 })],
-    ["unknown state fields", JSON.stringify({ state: { enabled: true, extra: true }, version: 1 })],
-    [
-      "unknown envelope fields",
-      JSON.stringify({ state: { enabled: true }, version: 1, extra: true }),
-    ],
   ])("clears %s", async (_label, stored) => {
     const backing = new MemoryStorage();
     backing.values.set("settings", stored);
@@ -37,6 +32,43 @@ describe("createValidatedPersistStorage", () => {
 
     await expect(storage.getItem("settings")).resolves.toBeNull();
     expect(backing.values.has("settings")).toBe(false);
+  });
+
+  // An older build reading what a later one stored: removing it would wipe the store (ALM-5127).
+  it.each([
+    ["state", { state: { enabled: true, landing: "workers" }, version: 1 }],
+    ["envelope", { state: { enabled: true }, version: 1, written: "later" }],
+  ])("reads back a value with %s keys it does not know, and keeps it", async (_label, value) => {
+    const backing = new MemoryStorage();
+    const stored = JSON.stringify(value);
+    backing.values.set("settings", stored);
+    const storage = createValidatedPersistStorage(backing, StateSchema);
+
+    await expect(storage.getItem("settings")).resolves.toEqual({
+      state: { enabled: true },
+      version: 1,
+    });
+    expect(backing.values.get("settings")).toBe(stored);
+  });
+
+  it("leaves a later build's unknown keys out of its next write", async () => {
+    const backing = new MemoryStorage();
+    backing.values.set(
+      "settings",
+      JSON.stringify({
+        state: { enabled: true, landing: "workers" },
+        version: 1,
+        written: "later",
+      }),
+    );
+    const storage = createValidatedPersistStorage(backing, StateSchema);
+    const read = await storage.getItem("settings");
+    if (!read) throw new Error("nothing read");
+
+    await storage.setItem("settings", { ...read, state: { enabled: false } });
+    expect(backing.values.get("settings")).toBe(
+      JSON.stringify({ state: { enabled: false }, version: 1 }),
+    );
   });
 
   it("returns schema-validated state", async () => {
