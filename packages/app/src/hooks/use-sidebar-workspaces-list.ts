@@ -1,4 +1,4 @@
-import { useHostFeatureMap } from "@/runtime/host-features";
+import { noHostLacksFeature, useHostFeatureAvailabilityMap } from "@/runtime/host-features";
 import { useCallback, useEffect, useMemo } from "react";
 import { useStoreWithEqualityFn } from "zustand/traditional";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
@@ -142,8 +142,9 @@ export function useSidebarWorkspacesList(options?: {
 
   const workspaceSort = useSidebarViewStore((state) => state.workspaceSort);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
-  const sortSupport = useHostFeatureMap(directoryServerIds, "workspaceSortTimes");
-  const workspaceSortSupported = [...sortSupport.values()].every(Boolean);
+  // A host that has not connected yet does not hold back sorting for the others (ALM-5046).
+  const sortSupport = useHostFeatureAvailabilityMap(directoryServerIds, "workspaceSortTimes");
+  const workspaceSortSupported = noHostLacksFeature(sortSupport.values());
   const sort =
     groupMode === "project" && (workspaceSort === "manual" || workspaceSortSupported)
       ? workspaceSort
