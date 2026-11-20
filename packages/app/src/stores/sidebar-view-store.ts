@@ -87,7 +87,11 @@ interface SidebarViewPersistedState {
   labelFilter: SidebarLabelFilter;
 }
 
-const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "label"]);
+// The retired "label" grouping reads as "project" in the schema itself, so a same-version hydrate,
+// which skips `migrate`, never hands the state a mode it has no branch for (ALM-5142).
+const PersistedSidebarGroupModeSchema = z
+  .enum(["project", "status", "label"])
+  .transform((mode): SidebarGroupMode => (mode === "label" ? "project" : mode));
 const SidebarLabelFilterSchema = z.object({
   labels: z.array(z.string()),
 });
