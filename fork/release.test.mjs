@@ -637,7 +637,7 @@ test("the release program's sign gets the zip on stdin, its answer kept, its bus
   );
   assert.equal(rejected.step, "notarize");
   assert.equal(rejected.outside, false);
-  // a ticket that did not staple is Apple's, as sincoder's stapler at notarize
+  // a ticket that did not staple is Apple's, as the keychain path's stapler at notarize
   const staple = attempt(
     signer(1, `${submitted}substrate-release: the ticket did not staple onto Paseo.app\n`),
   );
@@ -1305,7 +1305,7 @@ function fakeApp(root) {
   return app;
 }
 
-test("the build Mac's signing plan gives sincoder every path's options from electron-builder", (t) => {
+test("the build Mac's signing plan gives the signing Mac every path's options from electron-builder", (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "fork-plan-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const built = fakeApp(path.join(root, "build"));
@@ -1344,7 +1344,7 @@ test("the build Mac's signing plan gives sincoder every path's options from elec
   assert.equal(bundle.requirements, `=${designatedRequirement("sh.paseo.desktop")}`);
   assert.equal(plan.options[plan.defaultIndex].requirements, undefined);
 
-  // sincoder unpacks the same app elsewhere
+  // the signing Mac unpacks the same app elsewhere
   const app = fakeApp(path.join(root, "sign"));
   const files = path.join(root, "files");
   mkdirSync(files);
