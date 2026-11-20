@@ -20,7 +20,7 @@ import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useAppActivelyVisible } from "@/hooks/use-app-visible";
-import { useHostFeature } from "@/runtime/host-features";
+import { useHostFeature, useHostFeatureAvailability } from "@/runtime/host-features";
 
 function useSetupPanelDescriptor(
   target: { kind: "setup"; workspaceId: string },
@@ -264,7 +264,9 @@ function SetupPanel() {
 
   const isActive = useRetainedPanelActive();
   const isVisible = useAppActivelyVisible();
-  const supportsObservation = useHostFeature(serverId, "workspaceSetupObservation");
+  // `null` until the host has connected: it reads as not connected, not as one to update (ALM-5046).
+  const observationAvailability = useHostFeatureAvailability(serverId, "workspaceSetupObservation");
+  const supportsObservation = observationAvailability === true;
   const { snapshot, error: observationError } = useWorkspaceSetupSnapshot(
     serverId,
     target.workspaceId,
@@ -300,7 +302,12 @@ function SetupPanel() {
       <Text style={styles.hiddenStatus} testID="workspace-setup-status">
         {statusLabel}
       </Text>
-      {!supportsObservation && <Alert variant="warning" title={t("workspace.setup.updateHost")} />}
+      {observationAvailability === null && (
+        <Alert variant="warning" title={t("workspace.terminal.hostDisconnected")} />
+      )}
+      {observationAvailability === false && (
+        <Alert variant="warning" title={t("workspace.setup.updateHost")} />
+      )}
       {observationError && <Alert variant="error" title={observationError} />}
       {supportsObservation && !observationError && (
         <SetupPanelBody
