@@ -13,6 +13,11 @@ import {
   settleWorkspaceArchiveIntent,
 } from "@/contexts/session-workspace-upserts";
 import { useWorkspaceSetupStore } from "@/stores/workspace-setup-store";
+import { registerProjectDescriptor } from "@/hooks/open-project";
+import {
+  selectHydratedWorkspaceServerIds,
+  selectListedWorkspaceServerIds,
+} from "@/stores/session-store-hooks/selectors";
 import { WorkspaceDirectoryReplica } from "./workspace-replica";
 
 function workspace(id: string, projectId = "project"): WorkspaceDescriptorPayload {
@@ -60,6 +65,55 @@ it("commits workspace and project-parent state with filtered removals", () => {
   const session = useSessionStore.getState().sessions[serverId];
   expect(Array.from(session?.workspaces.keys() ?? [])).toEqual(["kept"]);
   expect(Array.from(session?.projects.keys() ?? [])).toEqual(["empty"]);
+  store.clearSession(serverId);
+});
+
+it("counts a host as listed only once a full listing commits, not when a project is added first", () => {
+  const serverId = "listed-replica";
+  const store = useSessionStore.getState();
+  store.initializeSession(serverId, null as unknown as DaemonClient);
+  const replica = new WorkspaceDirectoryReplica(serverId);
+  const addedPayload = {
+    projectId: "added",
+    projectDisplayName: "Added",
+    projectRootPath: "/repo/added",
+    projectKind: "git" as const,
+  };
+  const added = normalizeProjectDescriptor(addedPayload);
+  const old = normalizeProjectDescriptor({
+    projectId: "old",
+    projectDisplayName: "Old",
+    projectRootPath: "/repo/old",
+    projectKind: "git",
+  });
+
+  registerProjectDescriptor({
+    serverId,
+    project: addedPayload,
+    upsertProject: store.upsertProject,
+    setHasHydratedWorkspaces: store.setHasHydratedWorkspaces,
+  });
+  expect(selectHydratedWorkspaceServerIds(useSessionStore.getState(), [serverId])).toEqual([
+    serverId,
+  ]);
+  expect(selectListedWorkspaceServerIds(useSessionStore.getState(), [serverId])).toEqual([]);
+
+  replica.commitCached({ workspaces: new Map(), projects: new Map([[old.projectId, old]]) });
+  expect(selectListedWorkspaceServerIds(useSessionStore.getState(), [serverId])).toEqual([]);
+
+  replica.commitSnapshot(
+    {
+      workspaces: new Map(),
+      projects: new Map([
+        [added.projectId, added],
+        [old.projectId, old],
+      ]),
+    },
+    [],
+  );
+  expect(selectListedWorkspaceServerIds(useSessionStore.getState(), [serverId])).toEqual([
+    serverId,
+  ]);
   store.clearSession(serverId);
 });
 
