@@ -11,6 +11,7 @@ import {
   moveLooseSidebarProjectsToFolder,
   moveSidebarProjectToFolder,
   NO_FOLDS_UNDER_FILTER,
+  persistedSidebarFolders,
   PersistedSidebarFoldersSchema,
   removeSidebarFolder,
   renameSidebarFolder,
@@ -29,7 +30,7 @@ export type {
   SidebarFoldsUnderFilter,
   SidebarLandingProject,
 } from "./state";
-export { looseRepoKeys, normalizeSidebarFolderName } from "./state";
+export { normalizeSidebarFolderName } from "./state";
 
 interface SidebarFoldersStore extends SidebarFoldersState {
   /** Makes a folded folder holding `projectKey` and returns its id, or null for a blank name. */
@@ -94,12 +95,7 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
     {
       name: "sidebar-project-folders",
       storage: createValidatedPersistStorage(AsyncStorage, PersistedSidebarFoldersSchema),
-      partialize: (state) => ({
-        folders: state.folders,
-        folderIdByProjectKey: state.folderIdByProjectKey,
-        landingFolderId: state.landingFolderId,
-        knownProjectKeys: state.knownProjectKeys,
-      }),
+      partialize: persistedSidebarFolders,
       merge: (persistedState, currentState) =>
         mergePersistedSidebarFolders(persistedState, currentState),
     },

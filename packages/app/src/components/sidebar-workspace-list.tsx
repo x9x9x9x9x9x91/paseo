@@ -2785,12 +2785,12 @@ function ProjectModeList({
         setLandingFolder(null, []);
         return;
       }
-      setLandingFolder(folderId, [
-        ...allProjectsRef.current.map((project) => project.viewKey),
-        ...getProjectOrder(),
-      ]);
+      setLandingFolder(
+        folderId,
+        allProjectsRef.current.map((project) => project.viewKey),
+      );
     },
-    [getProjectOrder, setLandingFolder],
+    [setLandingFolder],
   );
 
   // A project taken out of the middle of a folder, loose or into a new folder, would split that

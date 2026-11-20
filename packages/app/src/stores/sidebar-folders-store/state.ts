@@ -126,8 +126,9 @@ export function looseRepoKeys(
 
 /**
  * Makes `folderId` the folder new projects land in, or none with `null`; one folder at a time.
- * Every project known now (`knownProjectKeys`: those listed, those in the project order, those
- * in a folder) counts as old, so only a project that appears later lands (ALM-5108).
+ * The projects listed now (`knownProjectKeys`) and those in a folder count as old, so only a
+ * project that appears later lands (ALM-5108). The project order's history is left out: a repo
+ * removed before the tick, or on a host not shown, lands once it is listed.
  */
 export function setSidebarLandingFolder(
   state: SidebarFoldersState,
@@ -234,6 +235,20 @@ export function toggleSidebarFolderFoldUnderFilter(
     foldedFolderIds: folded.includes(folderId)
       ? folded.filter((id) => id !== folderId)
       : [...folded, folderId],
+  };
+}
+
+/**
+ * What is stored: the folders, and the landing keys only while a folder is ticked, since an
+ * older build's strict schema refuses them and its storage then drops every folder (ALM-5108).
+ */
+export function persistedSidebarFolders(state: SidebarFoldersState): PersistedSidebarFolders {
+  const stored = { folders: state.folders, folderIdByProjectKey: state.folderIdByProjectKey };
+  if (state.landingFolderId === null) return stored;
+  return {
+    ...stored,
+    landingFolderId: state.landingFolderId,
+    knownProjectKeys: state.knownProjectKeys,
   };
 }
 
