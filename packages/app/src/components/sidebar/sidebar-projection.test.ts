@@ -175,4 +175,41 @@ describe("buildSidebarProjection", () => {
       { serverId: "srv", workspaceId: "unpinned" },
     ]);
   });
+
+  it("walks folders as the list shows them and skips a folded folder's workspaces", () => {
+    const loose = makeWorkspace("loose", "done", [], "loose");
+    const first = makeWorkspace("first", "done", [], "first");
+    const inside = makeWorkspace("inside", "done", [], "inside");
+    const input = {
+      ...projectionInput(),
+      projects: [
+        makeProject([inside.placement], "inside"),
+        makeProject([loose.placement], "loose"),
+        makeProject([first.placement], "first"),
+      ],
+      pinnedKeys: { pinnedWorkspaceKeys: [], pinnedAtByKey: {} },
+      workspaceEntriesByKey: new Map([
+        [loose.entry.workspaceKey, loose.entry],
+        [first.entry.workspaceKey, first.entry],
+        [inside.entry.workspaceKey, inside.entry],
+      ]),
+      folderIdByProjectKey: { inside: "workers", first: "workers" },
+    };
+    const open = buildSidebarProjection({
+      ...input,
+      folders: [{ id: "workers", name: "Workers", collapsed: false }],
+    });
+    expect(open.shortcutModel.shortcutTargets.map((target) => target.workspaceId)).toEqual([
+      "inside",
+      "first",
+      "loose",
+    ]);
+    const folded = buildSidebarProjection({
+      ...input,
+      folders: [{ id: "workers", name: "Workers", collapsed: true }],
+    });
+    expect(folded.shortcutModel.shortcutTargets.map((target) => target.workspaceId)).toEqual([
+      "loose",
+    ]);
+  });
 });
