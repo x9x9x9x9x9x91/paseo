@@ -93,13 +93,22 @@ describe("sidebar folders", () => {
       folderIdByProjectKey: { alma: "workers" },
       landingFolderId: null,
       knownProjectKeys: [],
+      knownServerIds: [],
     });
     expect(mergePersistedSidebarFolders({ folders: "nope" }, current)).toBe(current);
   });
 });
 
-const repo = (viewKey: string) => ({ viewKey, projectKind: "git" });
-const plain = (viewKey: string) => ({ viewKey, projectKind: "non_git" });
+const repo = (viewKey: string, serverIds = ["mac"]) => ({
+  viewKey,
+  projectKind: "git",
+  hosts: serverIds.map((serverId) => ({ serverId })),
+});
+const plain = (viewKey: string) => ({
+  viewKey,
+  projectKind: "non_git",
+  hosts: [{ serverId: "mac" }],
+});
 
 describe("filling a folder and landing new projects (ALM-5108)", () => {
   it("moves every loose repo into the folder and leaves plain folders and other folders' alone", () => {
@@ -127,16 +136,19 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
   });
 
   it("lands only a project that appears after the tick, a repo in the folder, a plain one loose", () => {
-    let state = setSidebarLandingFolder(withWorkers(), "workers", ["0sin-chats", "substrate"]);
+    let state = setSidebarLandingFolder(
+      withWorkers(),
+      "workers",
+      ["0sin-chats", "substrate"],
+      ["mac"],
+    );
     expect(state.landingFolderId).toBe("workers");
     expect(state.knownProjectKeys).toEqual(["0sin-chats", "substrate", "alma"]);
-    state = landNewSidebarProjects(state, [
-      plain("0sin-chats"),
-      repo("substrate"),
-      repo("alma"),
-      repo("crisis"),
-      plain("new-chats"),
-    ]);
+    state = landNewSidebarProjects(
+      state,
+      [plain("0sin-chats"), repo("substrate"), repo("alma"), repo("crisis"), plain("new-chats")],
+      ["mac"],
+    );
     expect(state.folderIdByProjectKey).toEqual({ alma: "workers", crisis: "workers" });
     expect(state.knownProjectKeys).toEqual([
       "0sin-chats",
@@ -145,34 +157,99 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
       "crisis",
       "new-chats",
     ]);
-    const again = landNewSidebarProjects(state, [repo("crisis"), plain("new-chats")]);
+    const again = landNewSidebarProjects(state, [repo("crisis"), plain("new-chats")], ["mac"]);
     expect(again).toBe(state);
   });
 
+  it("takes the first listing of a host not listed at the tick as known, and lands what comes later (ALM-5148)", () => {
+    // The tick: "mac" listed, "studio" filtered out or offline.
+    let state = setSidebarLandingFolder(withWorkers(), "workers", ["substrate"], ["mac"]);
+    state = landNewSidebarProjects(
+      state,
+      [repo("substrate"), repo("old-loose", ["studio"]), repo("crisis", ["studio", "mac"])],
+      ["mac", "studio"],
+    );
+    // A repo on "studio" alone was there before; one that is new on "mac" too lands.
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers", crisis: "workers" });
+    expect(state.knownProjectKeys).toEqual(["substrate", "alma", "old-loose", "crisis"]);
+    expect(state.knownServerIds).toEqual(["mac", "studio"]);
+    state = landNewSidebarProjects(
+      state,
+      [repo("substrate"), repo("old-loose", ["studio"]), repo("fresh", ["studio"])],
+      ["mac", "studio"],
+    );
+    expect(state.folderIdByProjectKey).toEqual({
+      alma: "workers",
+      crisis: "workers",
+      fresh: "workers",
+    });
+  });
+
+  it("lands nothing of a host's cached listing before the host lists its projects itself (ALM-5148)", () => {
+    let state = setSidebarLandingFolder(withWorkers(), "workers", [], ["mac"]);
+    // "studio" shows its cached projects; it has not listed them itself yet.
+    state = landNewSidebarProjects(state, [repo("cached", ["studio"])], ["mac"]);
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers" });
+    expect(state.knownServerIds).toEqual(["mac"]);
+    state = landNewSidebarProjects(
+      state,
+      [repo("cached", ["studio"]), repo("made-offline", ["studio"])],
+      ["mac", "studio"],
+    );
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers" });
+    const unchanged = landNewSidebarProjects(
+      state,
+      [repo("cached", ["studio"])],
+      ["mac", "studio"],
+    );
+    expect(unchanged).toBe(state);
+  });
+
+  it("takes the hosts listed now as listed at a tick stored without them (ALM-5148)", () => {
+    const folders = [{ id: "workers", name: "Workers", collapsed: true }];
+    let state = mergePersistedSidebarFolders(
+      {
+        folders,
+        folderIdByProjectKey: { alma: "workers" },
+        landingFolderId: "workers",
+        knownProjectKeys: ["alma"],
+      },
+      EMPTY_SIDEBAR_FOLDERS,
+    );
+    state = landNewSidebarProjects(state, [repo("alma")], ["mac"]);
+    expect(state.knownServerIds).toEqual(["mac"]);
+    state = landNewSidebarProjects(
+      state,
+      [repo("crisis"), repo("old-loose", ["studio"])],
+      ["mac", "studio"],
+    );
+    expect(state.folderIdByProjectKey).toEqual({ alma: "workers", crisis: "workers" });
+  });
+
   it("keeps a landed project out once it was taken out", () => {
-    let state = setSidebarLandingFolder(withWorkers(), "workers", []);
-    state = landNewSidebarProjects(state, [repo("crisis")]);
+    let state = setSidebarLandingFolder(withWorkers(), "workers", [], ["mac"]);
+    state = landNewSidebarProjects(state, [repo("crisis")], ["mac"]);
     state = moveSidebarProjectToFolder(state, "crisis", null);
-    expect(landNewSidebarProjects(state, [repo("crisis")])).toBe(state);
+    expect(landNewSidebarProjects(state, [repo("crisis")], ["mac"])).toBe(state);
     expect(state.folderIdByProjectKey).toEqual({ alma: "workers" });
   });
 
   it("lands nothing with no tick, and moves the tick to one folder at a time", () => {
     const loose = withWorkers();
-    expect(landNewSidebarProjects(loose, [repo("crisis")])).toBe(loose);
+    expect(landNewSidebarProjects(loose, [repo("crisis")], ["mac"])).toBe(loose);
     let state = createSidebarFolder(loose, { id: "music", name: "Music", projectKey: "night" });
-    state = setSidebarLandingFolder(state, "workers", []);
-    state = setSidebarLandingFolder(state, "music", ["crisis"]);
+    state = setSidebarLandingFolder(state, "workers", [], ["mac"]);
+    state = setSidebarLandingFolder(state, "music", ["crisis"], ["mac"]);
     expect(state.landingFolderId).toBe("music");
     expect(state.knownProjectKeys).toEqual(["crisis", "alma", "night"]);
-    state = setSidebarLandingFolder(state, null, []);
+    state = setSidebarLandingFolder(state, null, [], []);
     expect(state.landingFolderId).toBeNull();
     expect(state.knownProjectKeys).toEqual([]);
-    expect(setSidebarLandingFolder(state, "gone", [])).toBe(state);
+    expect(setSidebarLandingFolder(state, "gone", [], ["mac"])).toBe(state);
   });
 
   it("drops the tick with its folder, removed or emptied", () => {
-    const ticked = setSidebarLandingFolder(withWorkers(), "workers", ["crisis"]);
+    const ticked = setSidebarLandingFolder(withWorkers(), "workers", ["crisis"], ["mac"]);
     expect(removeSidebarFolder(ticked, "workers")).toEqual(EMPTY_SIDEBAR_FOLDERS);
     expect(moveSidebarProjectToFolder(ticked, "alma", null)).toEqual(EMPTY_SIDEBAR_FOLDERS);
   });
@@ -184,13 +261,15 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
       folderIdByProjectKey: loose.folderIdByProjectKey,
       landingFolderId: null,
       knownProjectKeys: [],
+      knownServerIds: [],
     });
-    const ticked = setSidebarLandingFolder(loose, "workers", ["chats"]);
+    const ticked = setSidebarLandingFolder(loose, "workers", ["chats"], ["mac"]);
     expect(persistedSidebarFolders(ticked)).toEqual({
       folders: loose.folders,
       folderIdByProjectKey: loose.folderIdByProjectKey,
       landingFolderId: "workers",
       knownProjectKeys: ["chats", "alma"],
+      knownServerIds: ["mac"],
     });
   });
 
@@ -202,11 +281,18 @@ describe("filling a folder and landing new projects (ALM-5108)", () => {
         folderIdByProjectKey: { alma: "workers" },
         landingFolderId: "workers",
         knownProjectKeys: ["alma", "chats"],
+        knownServerIds: ["mac"],
       },
       EMPTY_SIDEBAR_FOLDERS,
     );
     expect(stored.landingFolderId).toBe("workers");
     expect(stored.knownProjectKeys).toEqual(["alma", "chats"]);
+    expect(stored.knownServerIds).toEqual(["mac"]);
+    const withoutHosts = mergePersistedSidebarFolders(
+      { folders, folderIdByProjectKey: {}, landingFolderId: "workers", knownProjectKeys: [] },
+      EMPTY_SIDEBAR_FOLDERS,
+    );
+    expect(withoutHosts.knownServerIds).toBeNull();
     const gone = mergePersistedSidebarFolders(
       { folders, folderIdByProjectKey: {}, landingFolderId: "music", knownProjectKeys: ["x"] },
       EMPTY_SIDEBAR_FOLDERS,

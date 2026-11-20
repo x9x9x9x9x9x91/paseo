@@ -20,6 +20,11 @@ export interface SidebarFoldersState {
   landingFolderId: string | null;
   /** The projects known while a landing folder is set: a project not among them is new. */
   knownProjectKeys: string[];
+  /**
+   * The hosts whose projects were listed while a landing folder is set, so a project on none of
+   * them is not new to it (see `landNewSidebarProjects`); null for a tick stored without them.
+   */
+  knownServerIds: string[] | null;
 }
 
 /**
@@ -37,6 +42,7 @@ export const PersistedSidebarFoldersSchema = z.object({
   folderIdByProjectKey: z.record(z.string(), z.string()),
   landingFolderId: z.string().nullable().optional(),
   knownProjectKeys: z.array(z.string()).optional(),
+  knownServerIds: z.array(z.string()).nullable().optional(),
 });
 
 export type PersistedSidebarFolders = z.infer<typeof PersistedSidebarFoldersSchema>;
@@ -45,6 +51,7 @@ export type PersistedSidebarFolders = z.infer<typeof PersistedSidebarFoldersSche
 export const StoredSidebarLandingSchema = z.object({
   landingFolderId: z.string().nullable(),
   knownProjectKeys: z.array(z.string()),
+  knownServerIds: z.array(z.string()).nullable().optional(),
 });
 
 export const EMPTY_SIDEBAR_FOLDERS: SidebarFoldersState = {
@@ -52,6 +59,7 @@ export const EMPTY_SIDEBAR_FOLDERS: SidebarFoldersState = {
   folderIdByProjectKey: {},
   landingFolderId: null,
   knownProjectKeys: [],
+  knownServerIds: [],
 };
 
 /** What the landing rules need of a project: a repo goes in, a plain folder stays out. */
@@ -133,25 +141,38 @@ export function looseRepoKeys(
     .map((project) => project.viewKey);
 }
 
+/** A project as listed, with the hosts it is on, for `landNewSidebarProjects`. */
+export interface SidebarListedProject extends SidebarLandingProject {
+  hosts: readonly { serverId: string }[];
+}
+
 /**
  * Makes `folderId` the folder new projects land in, or none with `null`; one folder at a time.
  * The projects listed now (`knownProjectKeys`) and those in a folder count as old, so only a
- * project that appears later lands (ALM-5108). The project order's history is left out: a repo
- * removed before the tick, or on a host not shown, lands once it is listed.
+ * project that appears later lands (ALM-5108). `listedServerIds` are the hosts whose projects
+ * are listed now; a host not among them, filtered out or offline, has its first listing taken as
+ * old (ALM-5148). The project order's history is left out: a repo removed before the tick lands
+ * once it is listed.
  */
 export function setSidebarLandingFolder(
   state: SidebarFoldersState,
   folderId: string | null,
   knownProjectKeys: readonly string[],
+  listedServerIds: readonly string[],
 ): SidebarFoldersState {
   if (folderId === null) {
     return state.landingFolderId === null
       ? state
-      : { ...state, landingFolderId: null, knownProjectKeys: [] };
+      : { ...state, landingFolderId: null, knownProjectKeys: [], knownServerIds: [] };
   }
   if (!state.folders.some((folder) => folder.id === folderId)) return state;
   const known = new Set([...knownProjectKeys, ...Object.keys(state.folderIdByProjectKey)]);
-  return { ...state, landingFolderId: folderId, knownProjectKeys: [...known] };
+  return {
+    ...state,
+    landingFolderId: folderId,
+    knownProjectKeys: [...known],
+    knownServerIds: [...new Set(listedServerIds)],
+  };
 }
 
 /**
@@ -159,20 +180,36 @@ export function setSidebarLandingFolder(
  * folder, a plain folder stays loose (see `moveLooseSidebarProjectsToFolder`), and both are
  * known from then on, so a project taken out of the folder stays out. With no landing folder,
  * or nothing new, the state is returned as it was (ALM-5108).
+ *
+ * Only a project on a host whose projects were listed since the tick (`knownServerIds`) is new:
+ * a host filtered out or offline then was never read, so its first listing is taken as known,
+ * and every host in `listedServerIds` counts as read from now on (ALM-5148). A tick stored
+ * without the hosts takes the hosts listed now as read at the tick.
  */
 export function landNewSidebarProjects(
   state: SidebarFoldersState,
-  projects: readonly SidebarLandingProject[],
+  projects: readonly SidebarListedProject[],
+  listedServerIds: readonly string[],
 ): SidebarFoldersState {
   const folderId = state.landingFolderId;
   if (folderId === null || !state.folders.some((folder) => folder.id === folderId)) return state;
+  const readHosts = new Set(state.knownServerIds ?? listedServerIds);
+  const newHost = listedServerIds.some((serverId) => !readHosts.has(serverId));
   const known = new Set(state.knownProjectKeys);
   const fresh = projects.filter((project) => !known.has(project.viewKey));
-  if (fresh.length === 0) return state;
+  if (fresh.length === 0 && !newHost && state.knownServerIds !== null) return state;
+  const landing = fresh.filter((project) =>
+    project.hosts.some((host) => readHosts.has(host.serverId)),
+  );
   const folderIdByProjectKey = { ...state.folderIdByProjectKey };
-  for (const key of looseRepoKeys(state, fresh)) folderIdByProjectKey[key] = folderId;
+  for (const key of looseRepoKeys(state, landing)) folderIdByProjectKey[key] = folderId;
   for (const project of fresh) known.add(project.viewKey);
-  return { ...state, folderIdByProjectKey, knownProjectKeys: [...known] };
+  return {
+    ...state,
+    folderIdByProjectKey,
+    knownProjectKeys: [...known],
+    knownServerIds: [...new Set([...readHosts, ...listedServerIds])],
+  };
 }
 
 export function renameSidebarFolder(
@@ -254,6 +291,7 @@ export function persistedSidebarFolders(state: SidebarFoldersState): PersistedSi
     folderIdByProjectKey: state.folderIdByProjectKey,
     landingFolderId: state.landingFolderId,
     knownProjectKeys: state.knownProjectKeys,
+    knownServerIds: state.knownServerIds,
   };
 }
 
@@ -277,6 +315,8 @@ export function mergePersistedSidebarFolders<S extends SidebarFoldersState>(
     folderIdByProjectKey,
     landingFolderId: result.data.landingFolderId ?? null,
     knownProjectKeys: result.data.knownProjectKeys ?? [],
+    // A tick an older build stored has no hosts; see `landNewSidebarProjects`.
+    knownServerIds: result.data.knownServerIds ?? (result.data.landingFolderId ? null : []),
   });
 }
 
@@ -292,5 +332,5 @@ function dropEmptyFolders<S extends SidebarFoldersState>(state: S): S {
 function withLandingFolderInFolders<S extends SidebarFoldersState>(state: S): S {
   const id = state.landingFolderId;
   if (id === null || state.folders.some((folder) => folder.id === id)) return state;
-  return { ...state, landingFolderId: null, knownProjectKeys: [] };
+  return { ...state, landingFolderId: null, knownProjectKeys: [], knownServerIds: [] };
 }
