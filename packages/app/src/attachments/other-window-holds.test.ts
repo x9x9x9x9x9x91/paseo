@@ -408,6 +408,24 @@ describe("attachment sweeps across app windows", () => {
     expect(Array.from(shared.ids)).toEqual(["saved-in-new-window"]);
   });
 
+  it("skips a lone sweep that reaches the store after a newcomer's hold could run out", async () => {
+    const bus = createBus();
+    const shared = createSharedStore(["orphan"]);
+    const windowB = await openWindow(bus.channel(), shared.store, { holdTimeoutMs: 40 });
+    await settle(30);
+    // B's own save under way keeps it from listing the store past half the hold.
+    const openSave = shared.gateSaves();
+    const save = windowB.persistAttachmentFromBytes({ id: "large", ...bytes });
+    await settle();
+
+    const sweep = windowB.garbageCollectAttachments({ referencedIds: new Set() });
+    await settle(40);
+    openSave();
+    await Promise.all([sweep, save]);
+
+    expect(Array.from(shared.ids).toSorted()).toEqual(["large", "orphan"]);
+  });
+
   it("has a window opened while the sweep asks hold its saves until the sweep ends", async () => {
     const bus = createBus();
     const shared = createSharedStore([]);

@@ -294,8 +294,14 @@ export function createOtherWindowHolds(params: {
         post({ type: "done", from: windowId, sweepId });
       };
       if (peers.size === 0) {
+        // A window opened from now on holds its saves for holdTimeoutMs, as for a request.
+        const startedAt = Date.now();
         askingSweepIds.add(sweepId);
-        return { heldIds: new Set(), isHeld: () => true, finish };
+        return {
+          heldIds: new Set(),
+          isHeld: () => Date.now() - startedAt < holdTimeoutMs / 2,
+          finish,
+        };
       }
 
       const missAll = (missing: Set<string>) => {
