@@ -1358,6 +1358,8 @@ export const en = {
       menu: "Folder actions",
       moveTo: "Move to folder",
       takeOut: "Take out of folder",
+      moveLooseHere: "Move all other projects here",
+      landHere: "New projects land here",
       create: "New folder…",
       createConfirm: "Create folder",
       name: "Folder name",
