@@ -1324,6 +1324,17 @@ export const ar: TranslationResources = {
         "أضف أوامر الإعداد حتى تتمكن أشجار العمل الجديدة من تثبيت التبعيات وإعداد نفسها تلقائيًا.",
       openProjectSettings: "افتح إعدادات المشروع",
     },
+    folder: {
+      menu: "إجراءات المجلد",
+      moveTo: "نقل إلى مجلد",
+      takeOut: "إخراج من المجلد",
+      create: "مجلد جديد…",
+      createConfirm: "إنشاء مجلد",
+      name: "اسم المجلد",
+      rename: "إعادة تسمية المجلد",
+      renameConfirm: "إعادة تسمية",
+      remove: "إزالة المجلد",
+    },
     project: {
       actions: {
         menu: "إجراءات المشروع",
