@@ -6,6 +6,7 @@ import type { PersistStorage, StateStorage, StorageValue } from "zustand/middlew
  * state schema, never `z.strictObject`: a key a later build adds then reads back without it,
  * where a strict schema fails the parse and this storage removes the whole value, so opening an
  * older build would wipe the store (ALM-5127). The envelope reads loosely for the same reason.
+ * A write stores the parsed value, so that build's next write leaves the unknown keys out.
  */
 export function createValidatedPersistStorage<State>(
   backingStorage: StateStorage,
