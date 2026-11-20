@@ -2861,9 +2861,11 @@ function ProjectModeList({
 
   // Both read every project the hosts shown hold, those a project filter hides too, since a
   // folder is filled and landed for the whole list, not the filtered one (ALM-5108).
-  const { allProjects } = useSidebarModel();
+  const { allProjects, hydratedServerIds } = useSidebarModel();
   const allProjectsRef = useRef(allProjects);
   allProjectsRef.current = allProjects;
+  const hydratedServerIdsRef = useRef(hydratedServerIds);
+  hydratedServerIdsRef.current = hydratedServerIds;
   const landingFolderId = useSidebarFoldersStore((state) => state.landingFolderId);
   const moveLooseProjectsToFolder = useSidebarFoldersStore(
     (state) => state.moveLooseProjectsToFolder,
@@ -2879,12 +2881,13 @@ function ProjectModeList({
   const handleToggleLanding = useCallback(
     (folderId: string) => {
       if (useSidebarFoldersStore.getState().landingFolderId === folderId) {
-        setLandingFolder(null, []);
+        setLandingFolder(null, [], []);
         return;
       }
       setLandingFolder(
         folderId,
         allProjectsRef.current.map((project) => project.viewKey),
+        hydratedServerIdsRef.current,
       );
     },
     [setLandingFolder],
