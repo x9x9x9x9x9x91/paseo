@@ -206,11 +206,9 @@ its own.
   grew once its data arrived left the menu clipped, or hanging over its anchor, until it moved
   again. `AnchoredSurface` plays the same keyframes through the Web Animations API on web, which
   leaves no inline style; native keeps the Reanimated `Keyframe`.
-- **Animate only once placed.** The entering animation starts when the surface's position
-  resolves, so it runs at the final position rather than ending unseen at the off-screen
-  measuring position. Native remounts the surface there to start its Reanimated keyframe; web
-  starts its own animation and keeps the surface mounted, so a page's state from the measuring
-  frames survives, such as a name typed into its field (ALM-5057).
+- **Animate only once placed.** `AnchoredSurface` remounts the surface when its position resolves,
+  so the entering animation runs at the final position rather than ending unseen at the
+  off-screen measuring position.
 - **Sheets size to content.** `enableDynamicSizing`, not fixed snap points. A pushed page is
   rarely the height of the page before it. A fill page is the one exception.
 - **The sheet's content is teleported out of the menu's subtree**, so `MenuSheetSurface` rebuilds
