@@ -106,10 +106,12 @@ import {
 } from "@/components/sidebar/sidebar-folder-menu";
 import {
   buildSidebarProjectListItems,
-  foldersOfListItems,
+  foldersAsShown,
   projectKeysOfListItems,
   projectKeysWithFolderReordered,
   projectKeysWithProjectInFolder,
+  projectOrderGroupedByFolder,
+  projectOrderWithListOrder,
   type SidebarProjectListItem,
 } from "@/components/sidebar/sidebar-folders";
 import { useSidebarFoldersStore, type SidebarFolder } from "@/stores/sidebar-folders-store";
@@ -258,6 +260,8 @@ interface SidebarWorkspaceListProps {
   hasProjectsBeforeFilter: boolean;
   /** Whether a project filter is actually being applied — the resolved list, not the stored one. */
   hasActiveProjectFilter: boolean;
+  /** Which project filter is on, empty for none: a fold made under it is its own (ALM-5054). */
+  projectFilterKey: string;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   collapsedProjectKeys: ReadonlySet<string>;
   onToggleProjectCollapsed: (projectViewKey: string) => void;
@@ -2182,6 +2186,7 @@ export function SidebarWorkspaceList({
   projects,
   hasProjectsBeforeFilter,
   hasActiveProjectFilter,
+  projectFilterKey,
   workspaceEntriesByKey,
   collapsedProjectKeys,
   onToggleProjectCollapsed,
@@ -2286,6 +2291,7 @@ export function SidebarWorkspaceList({
         listHeaderComponent={listHeaderComponent}
         sidebarFilterEmpty={sidebarFilterEmpty}
         hasActiveProjectFilter={hasActiveProjectFilter}
+        projectFilterKey={projectFilterKey}
         parentGestureRef={parentGestureRef}
         dragGestureHostActive={dragGestureHostActive}
         pathname={pathname}
@@ -2457,6 +2463,7 @@ function ProjectModeList({
   listHeaderComponent,
   sidebarFilterEmpty,
   hasActiveProjectFilter,
+  projectFilterKey,
   parentGestureRef,
   dragGestureHostActive,
   pathname,
@@ -2593,38 +2600,64 @@ function ProjectModeList({
     });
   }, [creatingWorkspaceIds, projects]);
 
-  const applyVisibleProjectOrder = useCallback(
-    (reorderedProjectKeys: string[]) => {
+  const setProjectOrderIfChanged = useCallback(
+    (nextProjectOrder: string[]) => {
       const currentProjectOrder = getProjectOrder();
       if (
-        !hasVisibleOrderChanged({
-          currentOrder: currentProjectOrder,
-          reorderedVisibleKeys: reorderedProjectKeys,
-        })
+        nextProjectOrder.length === currentProjectOrder.length &&
+        nextProjectOrder.every((key, index) => key === currentProjectOrder[index])
       ) {
         return;
       }
+      setProjectOrder(nextProjectOrder);
+    },
+    [getProjectOrder, setProjectOrder],
+  );
 
-      setProjectOrder(
-        mergeWithRemainder({
-          currentOrder: currentProjectOrder,
-          reorderedVisibleKeys: reorderedProjectKeys,
+  // The list may be narrowed by a filter: its new order is merged into the whole project order
+  // place by place, so a project it hides stays where it stands and a folder takes its hidden
+  // projects along (ALM-5054).
+  const applyVisibleProjectOrder = useCallback(
+    (reorderedProjectKeys: string[]) => {
+      const folderState = useSidebarFoldersStore.getState();
+      setProjectOrderIfChanged(
+        projectOrderWithListOrder({
+          currentOrder: getProjectOrder(),
+          listProjectKeys: reorderedProjectKeys,
+          folders: folderState.folders,
+          folderIdByProjectKey: folderState.folderIdByProjectKey,
         }),
       );
     },
-    [getProjectOrder, setProjectOrder],
+    [getProjectOrder, setProjectOrderIfChanged],
   );
 
   // Folders sit one level above projects (ALM-5044). The list shows each folder where its first
   // project stands in the project order, so every move below is a project order: a dragged
   // folder carries its projects, and a project put in a folder joins it at its end.
-  const folders = useSidebarFoldersStore((state) => state.folders);
+  const savedFolders = useSidebarFoldersStore((state) => state.folders);
+  const foldsUnderFilter = useSidebarFoldersStore((state) => state.foldsUnderFilter);
+  const folders = useMemo(
+    () => foldersAsShown(savedFolders, projectFilterKey, foldsUnderFilter),
+    [foldsUnderFilter, projectFilterKey, savedFolders],
+  );
   const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
   const createFolder = useSidebarFoldersStore((state) => state.createFolder);
   const moveProjectToFolderInStore = useSidebarFoldersStore((state) => state.moveProjectToFolder);
   const renameFolder = useSidebarFoldersStore((state) => state.renameFolder);
   const removeFolder = useSidebarFoldersStore((state) => state.removeFolder);
-  const toggleFolderCollapsed = useSidebarFoldersStore((state) => state.toggleFolderCollapsed);
+  const toggleSavedFolderFold = useSidebarFoldersStore((state) => state.toggleFolderCollapsed);
+  const toggleFolderFoldUnderFilter = useSidebarFoldersStore(
+    (state) => state.toggleFolderFoldUnderFilter,
+  );
+  // Under a project filter a click folds the folder for that filter only, never its saved fold.
+  const toggleFolderCollapsed = useCallback(
+    (folderId: string) => {
+      if (projectFilterKey) toggleFolderFoldUnderFilter(projectFilterKey, folderId);
+      else toggleSavedFolderFold(folderId);
+    },
+    [projectFilterKey, toggleFolderFoldUnderFilter, toggleSavedFolderFold],
+  );
   const projectListItems = useMemo(
     () =>
       buildSidebarProjectListItems({
@@ -2651,41 +2684,50 @@ function ProjectModeList({
     [applyVisibleProjectOrder, projectListItems],
   );
 
-  // The actions read the list at the moment of the click, so the context they ride in changes
-  // only when the folders a project can be moved into do, not with every status update that
-  // rebuilds the list (each project row reads it past MemoProjectBlock's equality).
+  // The actions read the project order and the folder of each project at the moment of the
+  // click, so the context they ride in changes only when the folders do, not with every status
+  // update that rebuilds the list (each project row reads it past MemoProjectBlock's equality).
   const projectListItemsRef = useRef(projectListItems);
   projectListItemsRef.current = projectListItems;
   const folderIdByProjectKeyRef = useRef(folderIdByProjectKey);
   folderIdByProjectKeyRef.current = folderIdByProjectKey;
-  const listedFolderIds = foldersOfListItems(projectListItems)
-    .map((folder) => folder.id)
-    .join("\n");
-  const pickerFolders = useMemo(() => {
-    const listed = new Set(listedFolderIds.split("\n"));
-    return folders.filter((folder) => listed.has(folder.id));
-  }, [folders, listedFolderIds]);
 
   const handleRemoveFolder = useCallback(
     (folderId: string) => {
       // The folder's projects stay where it stood: its list order is made the project order
-      // first, so a member the order had elsewhere does not land there once it is loose.
+      // first, which gathers its projects at its place, those a filter hides too, so a member the
+      // order had elsewhere does not land there once it is loose.
       applyVisibleProjectOrder(projectKeysOfListItems(projectListItemsRef.current));
       removeFolder(folderId);
     },
     [applyVisibleProjectOrder, removeFolder],
   );
 
+  // A project taken out of the middle of a folder, loose or into a new folder, would split that
+  // folder in the order, and a filtered list could then show it elsewhere (ALM-5054).
+  const regroupProjectOrder = useCallback(() => {
+    const folderState = useSidebarFoldersStore.getState();
+    setProjectOrderIfChanged(
+      projectOrderGroupedByFolder({
+        order: getProjectOrder(),
+        folders: folderState.folders,
+        folderIdByProjectKey: folderState.folderIdByProjectKey,
+      }),
+    );
+  }, [getProjectOrder, setProjectOrderIfChanged]);
+
   const folderActions = useMemo<SidebarFolderActions>(
     () => ({
-      folders: pickerFolders,
+      // Every folder, a folder a filter hides included: the picker is no list of rows (ALM-5054).
+      folders: savedFolders,
       folderIdOf: (projectKey) => folderIdByProjectKeyRef.current[projectKey] ?? null,
       moveProjectToFolder: (projectKey, folderId) => {
         if ((folderIdByProjectKeyRef.current[projectKey] ?? null) === folderId) return;
+        // Read on the whole order, so a folder whose projects a filter hides keeps its place.
         if (folderId !== null) {
-          applyVisibleProjectOrder(
+          setProjectOrderIfChanged(
             projectKeysWithProjectInFolder({
-              projectKeys: projectKeysOfListItems(projectListItemsRef.current),
+              projectKeys: getProjectOrder(),
               folderIdByProjectKey: folderIdByProjectKeyRef.current,
               projectKey,
               folderId,
@@ -2693,12 +2735,21 @@ function ProjectModeList({
           );
         }
         moveProjectToFolderInStore(projectKey, folderId);
+        if (folderId === null) regroupProjectOrder();
       },
       createFolderWithProject: (name, projectKey) => {
         createFolder(name, projectKey);
+        regroupProjectOrder();
       },
     }),
-    [applyVisibleProjectOrder, createFolder, moveProjectToFolderInStore, pickerFolders],
+    [
+      createFolder,
+      getProjectOrder,
+      moveProjectToFolderInStore,
+      regroupProjectOrder,
+      savedFolders,
+      setProjectOrderIfChanged,
+    ],
   );
 
   const handleWorkspaceReorder = useCallback(

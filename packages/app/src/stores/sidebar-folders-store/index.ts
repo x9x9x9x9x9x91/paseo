@@ -7,14 +7,17 @@ import {
   EMPTY_SIDEBAR_FOLDERS,
   mergePersistedSidebarFolders,
   moveSidebarProjectToFolder,
+  NO_FOLDS_UNDER_FILTER,
   PersistedSidebarFoldersSchema,
   removeSidebarFolder,
   renameSidebarFolder,
   toggleSidebarFolderCollapsed,
+  toggleSidebarFolderFoldUnderFilter,
   type SidebarFoldersState,
+  type SidebarFoldsUnderFilter,
 } from "./state";
 
-export type { SidebarFolder, SidebarFoldersState } from "./state";
+export type { SidebarFolder, SidebarFoldersState, SidebarFoldsUnderFilter } from "./state";
 export { normalizeSidebarFolderName } from "./state";
 
 interface SidebarFoldersStore extends SidebarFoldersState {
@@ -24,6 +27,9 @@ interface SidebarFoldersStore extends SidebarFoldersState {
   renameFolder: (folderId: string, name: string) => void;
   removeFolder: (folderId: string) => void;
   toggleFolderCollapsed: (folderId: string) => void;
+  /** Kept in memory only, never in `partialize`: see `SidebarFoldsUnderFilter`. */
+  foldsUnderFilter: SidebarFoldsUnderFilter;
+  toggleFolderFoldUnderFilter: (filterKey: string, folderId: string) => void;
 }
 
 function createFolderId(): string {
@@ -56,6 +62,15 @@ export const useSidebarFoldersStore = create<SidebarFoldersStore>()(
       removeFolder: (folderId) => set((state) => removeSidebarFolder(state, folderId)),
       toggleFolderCollapsed: (folderId) =>
         set((state) => toggleSidebarFolderCollapsed(state, folderId)),
+      foldsUnderFilter: NO_FOLDS_UNDER_FILTER,
+      toggleFolderFoldUnderFilter: (filterKey, folderId) =>
+        set((state) => ({
+          foldsUnderFilter: toggleSidebarFolderFoldUnderFilter(
+            state.foldsUnderFilter,
+            filterKey,
+            folderId,
+          ),
+        })),
     }),
     {
       name: "sidebar-project-folders",
