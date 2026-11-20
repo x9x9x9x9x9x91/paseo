@@ -130,12 +130,12 @@ describe("anchored menu surface on web", () => {
   });
 });
 
+function noop(): void {}
+
 describe("menu text field keys on web", () => {
   beforeEach(async () => {
     await page.viewport(1280, 900);
   });
-
-  function noop(): void {}
 
   function mountMenuWithField(): HTMLInputElement {
     mountMenuAbovePill(
