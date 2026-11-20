@@ -217,9 +217,18 @@ const mockHostFeatures = vi.hoisted(() => ({
   >,
 }));
 
+// Whether the host has sent server info; false stands for a host that has not connected yet.
+const mockHostServerInfo = vi.hoisted(() => ({ current: true }));
+
 vi.mock("@/runtime/host-features", () => ({
   useHostFeature: (_serverId: string | null, feature: string) =>
     mockHostFeatures.current[feature] === true,
+  useHostFeatureAvailability: (_serverId: string | null, feature: string) => {
+    if (!mockHostServerInfo.current) return null;
+    return feature === "providersSnapshot"
+      ? mockSnapshot.current.supportsSnapshot
+      : mockHostFeatures.current[feature] === true;
+  },
 }));
 
 vi.mock("@/runtime/host-runtime", () => ({
@@ -378,6 +387,22 @@ describe("ImportSessionSheet", () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    mockHostServerInfo.current = true;
+  });
+
+  it("asks to connect a host that has sent no server info, not to update it", async () => {
+    mockHostServerInfo.current = false;
+    const fetchRecentProviderSessions = vi.fn();
+    const importAgent = vi.fn();
+
+    renderSheet({ fetchRecentProviderSessions, importAgent } as Pick<
+      DaemonClient,
+      "fetchRecentProviderSessions" | "importAgent"
+    >);
+
+    await screen.findByText("Connect to a host to import sessions");
+    expect(screen.queryByText("Update the host to import sessions.")).toBeNull();
+    expect(fetchRecentProviderSessions).not.toHaveBeenCalled();
   });
 
   it("shows an update-host message when the daemon does not support provider snapshots", async () => {
