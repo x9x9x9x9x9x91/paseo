@@ -1343,6 +1343,8 @@ export const ru: TranslationResources = {
       menu: "Действия с папкой",
       moveTo: "Переместить в папку",
       takeOut: "Убрать из папки",
+      moveLooseHere: "Переместить сюда все остальные проекты",
+      landHere: "Новые проекты попадают сюда",
       create: "Новая папка…",
       createConfirm: "Создать папку",
       name: "Название папки",

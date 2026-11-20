@@ -1350,6 +1350,8 @@ export const ptBR: TranslationResources = {
       menu: "Ações da pasta",
       moveTo: "Mover para pasta",
       takeOut: "Tirar da pasta",
+      moveLooseHere: "Mover todos os outros projetos para cá",
+      landHere: "Novos projetos entram aqui",
       create: "Nova pasta…",
       createConfirm: "Criar pasta",
       name: "Nome da pasta",

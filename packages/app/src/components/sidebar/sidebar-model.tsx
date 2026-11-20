@@ -17,7 +17,11 @@ import {
 } from "@/stores/sidebar-view-store";
 import { useSidebarOrderStore } from "@/stores/sidebar-order-store";
 import type { SidebarShortcutModel } from "@/utils/sidebar-shortcuts";
-import { foldersAsShown, projectFilterKeyOf } from "./sidebar-folders";
+import {
+  foldersAsShown,
+  projectFilterKeyOf,
+  projectKeysWithProjectsInFolder,
+} from "./sidebar-folders";
 import { buildSidebarProjection } from "./sidebar-projection";
 import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model";
 import { filterWorkspacesByLabels, type SidebarWorkspaceGroup } from "./sidebar-labels";
@@ -52,6 +56,33 @@ interface SidebarModel extends SidebarWorkspacesListResult {
 
 const SidebarModelContext = createContext<SidebarModel | null>(null);
 
+/**
+ * Runs `change`, a folder store change that puts projects into `folderId`, then takes the
+ * projects it moved to the folder's end in the project order, as a move from a project's menu
+ * does, so the folder keeps its place (ALM-5108).
+ */
+export function moveProjectsIntoFolderWithOrder(folderId: string, change: () => void): void {
+  const before = useSidebarFoldersStore.getState();
+  change();
+  const after = useSidebarFoldersStore.getState();
+  if (after === before) return;
+  const movingKeys = Object.entries(after.folderIdByProjectKey)
+    .filter(([key, id]) => id === folderId && before.folderIdByProjectKey[key] !== id)
+    .map(([key]) => key);
+  if (movingKeys.length === 0) return;
+  const orderStore = useSidebarOrderStore.getState();
+  const order = orderStore.getProjectOrder();
+  const next = projectKeysWithProjectsInFolder({
+    projectKeys: order,
+    folderIdByProjectKey: before.folderIdByProjectKey,
+    movingKeys,
+    folderId,
+  });
+  if (next.length !== order.length || next.some((key, index) => key !== order[index])) {
+    orderStore.setProjectOrder(next);
+  }
+}
+
 export function SidebarModelProvider({
   active,
   keyboardNavigationActive = false,
@@ -80,6 +111,16 @@ export function SidebarModelProvider({
   const savedFolders = useSidebarFoldersStore((state) => state.folders);
   const foldsUnderFilter = useSidebarFoldersStore((state) => state.foldsUnderFilter);
   const folderIdByProjectKey = useSidebarFoldersStore((state) => state.folderIdByProjectKey);
+  const landingFolderId = useSidebarFoldersStore((state) => state.landingFolderId);
+  // A project that appears while a folder is ticked "New projects land here" goes into it, one a
+  // project filter hides too: the list read is every project on the hosts shown (ALM-5108).
+  useEffect(() => {
+    if (!modelActive || landingFolderId === null) return;
+    const projects = list.projects;
+    moveProjectsIntoFolderWithOrder(landingFolderId, () =>
+      useSidebarFoldersStore.getState().landNewProjects(projects),
+    );
+  }, [landingFolderId, list.projects, modelActive]);
   const pinnedWorkspaceOrder = useSidebarOrderStore((state) => state.pinnedWorkspaceOrder);
   const toggleProjectCollapsed = useSidebarCollapsedSectionsStore(
     (state) => state.toggleProjectCollapsed,
