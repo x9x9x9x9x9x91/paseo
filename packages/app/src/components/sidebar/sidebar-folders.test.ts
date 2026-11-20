@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSidebarProjectListItems,
-  foldersOfListItems,
+  foldersAsShown,
+  projectFilterKeyOf,
   projectKeysInCollapsedFolders,
   projectKeysOfListItems,
   projectKeysWithFolderReordered,
   projectKeysWithProjectInFolder,
+  projectOrderGroupedByFolder,
+  projectOrderWithListOrder,
 } from "./sidebar-folders";
 
 const projects = ["chats", "alma", "substrate", "cleanlane", "crisis"].map((viewKey) => ({
@@ -122,13 +125,133 @@ describe("sidebar folders in the project list", () => {
       }),
     ).toEqual(["chats", "alma", "substrate", "cleanlane"]);
   });
+});
 
-  it("offers only the folders that have a row in the list", () => {
-    const items = buildSidebarProjectListItems({
-      projects,
-      folders: [workers, { id: "stale", name: "Stale", collapsed: true }],
-      folderIdByProjectKey: { alma: "workers", removedProject: "stale" },
+describe("a filtered move in the project order", () => {
+  const folders = [workers];
+
+  it("leaves the projects the filter hides where they stand", () => {
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["chats", "alma", "substrate", "cleanlane", "crisis"],
+        listProjectKeys: ["cleanlane", "chats"],
+        folders,
+        folderIdByProjectKey: {},
+      }),
+    ).toEqual(["cleanlane", "alma", "substrate", "chats", "crisis"]);
+  });
+
+  it("moves a folder with its hidden projects", () => {
+    // Workers holds alma (hidden) and substrate (listed); the filter shows substrate and crisis.
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["alma", "chats", "substrate", "crisis", "cleanlane"],
+        listProjectKeys: ["crisis", "substrate"],
+        folders,
+        folderIdByProjectKey: { alma: "workers", substrate: "workers" },
+      }),
+    ).toEqual(["crisis", "chats", "alma", "substrate", "cleanlane"]);
+  });
+
+  it("keeps a folder's hidden projects at its place when nothing moved", () => {
+    // What removing the folder writes first: its projects stay where it stood, not at the end.
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["chats", "alma", "substrate", "cleanlane", "crisis"],
+        listProjectKeys: ["chats", "substrate", "cleanlane"],
+        folders,
+        folderIdByProjectKey: { alma: "workers", substrate: "workers" },
+      }),
+    ).toEqual(["chats", "alma", "substrate", "cleanlane", "crisis"]);
+  });
+
+  it("keeps a folder's hidden project in its place inside the folder", () => {
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["chats", "alma", "substrate", "crisis"],
+        listProjectKeys: ["chats", "crisis", "alma"],
+        folders,
+        folderIdByProjectKey: { alma: "workers", substrate: "workers", crisis: "workers" },
+      }),
+    ).toEqual(["chats", "crisis", "substrate", "alma"]);
+  });
+
+  it("counts a project in a folder that is gone as loose", () => {
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["alma", "chats", "substrate"],
+        listProjectKeys: ["substrate", "alma"],
+        folders,
+        folderIdByProjectKey: { alma: "gone", substrate: "gone" },
+      }),
+    ).toEqual(["substrate", "chats", "alma"]);
+  });
+
+  it("puts a listed project the order lacks at the end", () => {
+    expect(
+      projectOrderWithListOrder({
+        currentOrder: ["chats", "alma"],
+        listProjectKeys: ["alma", "fresh"],
+        folders,
+        folderIdByProjectKey: {},
+      }),
+    ).toEqual(["chats", "alma", "fresh"]);
+  });
+});
+
+describe("an order grouped by folder", () => {
+  it("puts a folder's projects side by side where its first one stands", () => {
+    // Taking substrate out of the middle of Workers leaves alma, substrate, crisis in the order.
+    expect(
+      projectOrderGroupedByFolder({
+        order: ["chats", "alma", "substrate", "crisis", "cleanlane"],
+        folders: [workers],
+        folderIdByProjectKey: { alma: "workers", crisis: "workers" },
+      }),
+    ).toEqual(["chats", "alma", "crisis", "substrate", "cleanlane"]);
+  });
+});
+
+describe("folders under a project filter", () => {
+  const open = { id: "open", name: "Open", collapsed: false };
+
+  it("shows the saved folds when no filter is on", () => {
+    const folders = [workers, open];
+    expect(foldersAsShown(folders, "", { filterKey: "", foldedFolderIds: ["open"] })).toBe(folders);
+  });
+
+  it("shows every folder open under a filter, the saved fold untouched", () => {
+    const shown = foldersAsShown([workers, open], projectFilterKeyOf(["alma"]), {
+      filterKey: "",
+      foldedFolderIds: [],
     });
-    expect(foldersOfListItems(items).map((folder) => folder.id)).toEqual(["workers"]);
+    expect(shown.map((folder) => folder.collapsed)).toEqual([false, false]);
+    expect(workers.collapsed).toBe(true);
+  });
+
+  it("shows a folder folded under the same filter folded, and only under it", () => {
+    const folds = { filterKey: projectFilterKeyOf(["alma", "chats"]), foldedFolderIds: ["open"] };
+    expect(
+      foldersAsShown([workers, open], projectFilterKeyOf(["chats", "alma"]), folds).map(
+        (folder) => folder.collapsed,
+      ),
+    ).toEqual([false, true]);
+    expect(
+      foldersAsShown([workers, open], projectFilterKeyOf(["alma"]), folds).map(
+        (folder) => folder.collapsed,
+      ),
+    ).toEqual([false, false]);
+  });
+
+  it("lists a project the filter matches inside a folded folder", () => {
+    const items = buildSidebarProjectListItems({
+      projects: [{ viewKey: "alma" }],
+      folders: foldersAsShown([workers], projectFilterKeyOf(["alma"]), {
+        filterKey: "",
+        foldedFolderIds: [],
+      }),
+      folderIdByProjectKey: { alma: "workers" },
+    });
+    expect(projectKeysInCollapsedFolders(items).size).toBe(0);
   });
 });
