@@ -93,6 +93,12 @@ function mountMenuAbovePill(body: ReactNode): void {
   act(() => element("pill").click());
 }
 
+/** Counts its own mounts, the way a page's typed name lives and dies with its component. */
+function CountsMounts({ onMount }: { onMount: () => void }) {
+  useEffect(onMount, [onMount]);
+  return <View testID="body" style={SHORT} />;
+}
+
 describe("anchored menu surface on web", () => {
   beforeEach(async () => {
     await page.viewport(1280, 900);
@@ -120,6 +126,23 @@ describe("anchored menu surface on web", () => {
     const body = element("body").getBoundingClientRect();
     const panel = element("panel").getBoundingClientRect();
     expect(panel.width).toBeGreaterThanOrEqual(body.width);
+  });
+
+  // A page measured off-screen and then placed keeps its state, such as a name typed into its
+  // field in between (ALM-5057).
+  it("keeps its content mounted from measuring to placed", async () => {
+    let mounts = 0;
+    const countMount = () => {
+      mounts += 1;
+    };
+    mountMenuAbovePill(<CountsMounts onMount={countMount} />);
+
+    await wait(SETTLE_MS);
+
+    const pill = element("pill").getBoundingClientRect();
+    const panel = element("panel").getBoundingClientRect();
+    expect(panel.bottom).toBeLessThanOrEqual(pill.top);
+    expect(mounts).toBe(1);
   });
 });
 
