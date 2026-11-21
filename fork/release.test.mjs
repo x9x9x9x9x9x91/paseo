@@ -1201,6 +1201,76 @@ test("a branch with a merge keeps no part of a stopped rebase, and keeps a whole
   assert.equal(readKeptRebase(repo).source, rev("fork"));
 });
 
+// One build host's formatPort in a child process, whose job folder (PASEO_FORK_ROOT) is the
+// test's own: its formatter writes `rewrites`, each file's text as the formatter would leave it.
+const FORMAT_RUN = `
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+const { formatPort } = await import(process.env.JOB_URL);
+const { cwd, rewrites } = JSON.parse(process.env.RUN);
+const format = () => {
+  for (const [file, text] of Object.entries(rewrites)) writeFileSync(path.join(cwd, file), text);
+};
+process.stdout.write("\\n" + formatPort("v0.11.4", { cwd, format }) + "\\n");
+`;
+
+function formatRepo(t) {
+  const { repo, git, write, commit } = upstreamRepo(t);
+  write(FIRST, "upstream's a\n");
+  write(SECOND, "upstream's b\n");
+  write("packages/app/src/upstreams.ts", "upstream's own file\n");
+  commit("upstream's files");
+  git("tag", "-f", "v0.11.4");
+  const out = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" }).stdout.trimEnd();
+  const root = mkdtempSync(path.join(os.tmpdir(), "fork-root-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const formatPort = (rewrites) => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", FORMAT_RUN], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PASEO_FORK_ROOT: root,
+        JOB_URL: new URL("./release.mjs", import.meta.url).href,
+        RUN: JSON.stringify({ cwd: repo, rewrites }),
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim().split("\n").at(-1);
+  };
+  return { repo, write, commit, out, formatPort };
+}
+
+test("a port the formatter rewrites is folded into the last commit that changes each file", (t) => {
+  const { write, commit, out, formatPort } = formatRepo(t);
+  write(FIRST, "the fork's a,  as the agent left it\n");
+  write(SECOND, "the fork's b,  as the agent left it\n");
+  commit("feat(app): the fork's a and b");
+  write(FIRST, "the fork's next a,  as the agent left it\n");
+  commit("fix(app): the fork's next a");
+  const subjects = out("log", "--format=%s %an", "v0.11.4..HEAD");
+  const head = formatPort({
+    [FIRST]: "the fork's next a, formatted\n",
+    [SECOND]: "the fork's b, formatted\n",
+    "packages/app/src/upstreams.ts": "upstream's own file, which the check judges as it is\n",
+  });
+  assert.equal(out("rev-parse", "HEAD"), head);
+  assert.equal(out("log", "--format=%s %an", "v0.11.4..HEAD"), subjects);
+  assert.equal(out("status", "--porcelain"), "");
+  assert.equal(out("show", "HEAD~1:" + SECOND), "the fork's b, formatted");
+  assert.equal(out("show", "HEAD~1:" + FIRST), "the fork's a,  as the agent left it");
+  assert.equal(out("show", "HEAD:" + FIRST), "the fork's next a, formatted");
+  assert.equal(out("show", "HEAD:packages/app/src/upstreams.ts"), "upstream's own file");
+});
+
+test("a port the formatter leaves alone keeps its head", (t) => {
+  const { write, commit, out, formatPort } = formatRepo(t);
+  write(FIRST, "the fork's a\n");
+  commit("feat(app): the fork's a");
+  const before = out("rev-parse", "HEAD");
+  assert.equal(formatPort({ [FIRST]: "the fork's a\n" }), before);
+  assert.equal(out("rev-parse", "HEAD"), before);
+});
+
 test("the conflict agent may git rm a file upstream deleted, and its prompt says to", () => {
   const tools = CONFLICT_AGENT_TOOLS.split(",");
   assert.ok(tools.includes("Bash(git rm:*)"));
