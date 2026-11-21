@@ -1406,10 +1406,12 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
 
 /**
  * The port the build host formatted (formatPort) becomes the candidate here, the commit it
- * checked and built, so the signed app and the pushed branch are that one.
+ * checked and built, so the signed app and the pushed branch are that one. Returns the release's
+ * features, read again from a new port, since a commit the fold dropped leaves them too.
  */
-function takeFormattedPort({ host, head, runDir }) {
-  if (!head || head === git(["rev-parse", "HEAD"], { runDir })) return;
+function takeFormattedPort({ ctx, formatOnto, head, features, runDir }) {
+  const host = ctx.host;
+  if (!formatOnto || !head || head === git(["rev-parse", "HEAD"], { runDir })) return features;
   withHost(host, runDir, () =>
     git(["fetch", "-q", "--no-tags", `${host}:${HOST_ROOT}/build`, `+${PORT_REF}:${PORT_REF}`], {
       step: "build-host",
@@ -1421,6 +1423,7 @@ function takeFormattedPort({ host, head, runDir }) {
     throw new StepFailure("build-host", `${host}'s formatted port is not the ${head} it built`);
   }
   git(["checkout", "-q", "-f", "--detach", head], { runDir });
+  return featureSubjects(commitSubjects(`${formatOnto}..HEAD`, runDir));
 }
 
 // The heavy files of a run folder: the app's archives, the release, signing and checking.
@@ -1650,6 +1653,9 @@ function hostPhase(phase, runName) {
     const env = nodeEnv(job.nodeMajor, runDir);
     if (phase === "app") {
       log(`${runName}: checking and building ${job.version}`);
+      // A fold (formatPort) a run could not abort leaves its rebase, whose abort after the
+      // checkout would put back that run's commit.
+      if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
       checkoutCandidate({ runDir });
       runSteps(PREPARE_STEPS, { runDir, env });
       if (job.formatOnto) {
@@ -2126,12 +2132,11 @@ export function formatPort(tag, { runDir, cwd = BUILD, env = {}, format = runFor
       maxBuffer: 256 * 1024 * 1024,
     });
     if (listed.status !== 0) {
-      throw new StepFailure("format-port", `git ${args.join(" ")}: exit ${listed.status}`);
+      const why = `exit ${listed.status}: ${listed.stderr?.trim() ?? ""}`;
+      throw new StepFailure("format-port", `git ${args.join(" ")}: ${why}`);
     }
     return listed.stdout.split("\0").filter(Boolean);
   };
-  // A fold an earlier run could not abort leaves its rebase behind, which checkout keeps.
-  if (rebaseInProgress(cwd)) run("git", ["rebase", "--abort"], { ...at, quiet: true });
   const port = new Set(names(["diff", "--name-only", "-z", "--no-renames", tag, "HEAD"]));
   format({ runDir, cwd, env });
   const rewritten = names(["diff", "--name-only", "-z", "--no-renames"]);
@@ -2272,7 +2277,7 @@ function release({
   const job = { version, owner, nodeMajor: nodeMajor(ctx.latestTag, runDir), checks, formatOnto };
   prepareHost({ host: ctx.host, tag: ctx.latestTag, runDir, job });
   const built = runHostPhase({ host: ctx.host, phase: "app", runDir, timeoutMs: 4 * 60 * 60_000 });
-  if (formatOnto) takeFormattedPort({ host: ctx.host, head: built.head, runDir });
+  features = takeFormattedPort({ ctx, formatOnto, head: built.head, features, runDir });
   if (gateOnly) {
     log(`  checked and built ${ctx.version} unsigned; the app stays ${ctx.publishedVersion}`);
     return;
