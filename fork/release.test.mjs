@@ -1262,6 +1262,25 @@ test("a port the formatter rewrites is folded into the last commit that changes 
   assert.equal(out("show", "HEAD:packages/app/src/upstreams.ts"), "upstream's own file");
 });
 
+test("a commit whose whole change the formatter undoes leaves the port, a bracketed path folds", (t) => {
+  const { write, commit, out, formatPort } = formatRepo(t);
+  const bracketed = "packages/app/src/[id]/c.ts";
+  write(FIRST, "upstream's a \n");
+  commit("fix(app): a's spacing, as the agent left it");
+  write(SECOND, "the fork's b\n");
+  write(bracketed, "the fork's c,  as the agent left it\n");
+  commit("feat(app): the fork's b and c");
+  const head = formatPort({
+    [FIRST]: "upstream's a\n",
+    [bracketed]: "the fork's c, formatted\n",
+  });
+  assert.equal(out("rev-parse", "HEAD"), head);
+  assert.equal(out("log", "--format=%s", "v0.11.4..HEAD"), "feat(app): the fork's b and c");
+  assert.equal(out("status", "--porcelain"), "");
+  assert.equal(out("show", "HEAD:" + FIRST), "upstream's a");
+  assert.equal(out("show", "HEAD:" + bracketed), "the fork's c, formatted");
+});
+
 test("a port the formatter leaves alone keeps its head", (t) => {
   const { write, commit, out, formatPort } = formatRepo(t);
   write(FIRST, "the fork's a\n");

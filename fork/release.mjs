@@ -2111,25 +2111,38 @@ function keepUpToStop({ start, base, head, record, runDir, cwd }) {
  * agent works where there is no node_modules and may run no formatter, so a port it wrote by hand
  * can fail that check (ALM-5239). What the formatter rewrites in a file the branch changes on
  * `tag` is folded into the last branch commit that changes that file, so no later commit replays
- * over it and every commit keeps its message and author; a file the branch leaves alone stays as
- * upstream has it, for the check to judge. Returns HEAD, a new commit when anything was folded.
+ * over it and every commit keeps its message and author, but for one whose whole change the
+ * formatter undoes, which leaves the port; a file the branch leaves alone stays as upstream has it,
+ * for the check to judge. Returns HEAD, a new commit when anything was folded.
  */
 export function formatPort(tag, { runDir, cwd = BUILD, env = {}, format = runFormatter } = {}) {
   const at = { runDir, cwd };
-  const names = (args) =>
-    git(["-c", "core.quotePath=false", ...args], at)
-      .split("\0")
-      .filter(Boolean);
+  // Paths go to git as they are: a bracket or a leading colon is no pattern, and no list is trimmed.
+  const literal = { ...at, env: { GIT_LITERAL_PATHSPECS: "1" } };
+  const names = (args) => {
+    const listed = spawnSync("git", ["-c", "core.quotePath=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    if (listed.status !== 0) {
+      throw new StepFailure("format-port", `git ${args.join(" ")}: exit ${listed.status}`);
+    }
+    return listed.stdout.split("\0").filter(Boolean);
+  };
+  // A fold an earlier run could not abort leaves its rebase behind, which checkout keeps.
+  if (rebaseInProgress(cwd)) run("git", ["rebase", "--abort"], { ...at, quiet: true });
   const port = new Set(names(["diff", "--name-only", "-z", "--no-renames", tag, "HEAD"]));
   format({ runDir, cwd, env });
   const rewritten = names(["diff", "--name-only", "-z", "--no-renames"]);
   const upstreams = rewritten.filter((file) => !port.has(file));
-  if (upstreams.length > 0) git(["checkout", "-q", "--", ...upstreams], at);
+  if (upstreams.length > 0) git(["checkout", "-q", "--", ...upstreams], literal);
   const ours = rewritten.filter((file) => port.has(file));
   if (ours.length === 0) return git(["rev-parse", "HEAD"], at);
   // The folds are committed as the port's own committer, which the build host has no config for.
   const [name, email] = git(["log", "-1", "--format=%cn%x00%ce", "HEAD"], at).split("\0");
   const identity = {
+    GIT_LITERAL_PATHSPECS: "1",
     GIT_AUTHOR_NAME: name,
     GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: name,
@@ -2138,7 +2151,7 @@ export function formatPort(tag, { runDir, cwd = BUILD, env = {}, format = runFor
   const quiet = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"];
   const into = new Map();
   for (const file of ours) {
-    const last = git(["log", "-1", "--format=%H", `${tag}..HEAD`, "--", file], at);
+    const last = git(["log", "-1", "--format=%H", `${tag}..HEAD`, "--", file], literal);
     into.set(last, [...(into.get(last) ?? []), file]);
   }
   for (const [commit, files] of into) {
@@ -2148,12 +2161,23 @@ export function formatPort(tag, { runDir, cwd = BUILD, env = {}, format = runFor
     });
   }
   const formatted = git(["rev-parse", "HEAD^{tree}"], at);
-  const squash = run("git", [...quiet, "rebase", "-q", "-i", "--autosquash", tag], {
+  const folding = {
     step: "format-port",
     ...at,
     quiet: true,
-    env: { ...identity, GIT_SEQUENCE_EDITOR: ":" },
-  });
+    env: { ...identity, GIT_SEQUENCE_EDITOR: ":", GIT_EDITOR: ":" },
+  };
+  let squash = run("git", [...quiet, "rebase", "-q", "-i", "--autosquash", tag], folding);
+  // A commit whose whole change the formatter undoes folds to nothing, which git refuses to
+  // amend: that commit leaves the port, the commit being amended dropped and the fold carried on.
+  const emptied = () =>
+    rebaseInProgress(cwd) &&
+    run("git", ["diff", "--cached", "--quiet", "HEAD^"], { ...at, quiet: true }).status === 0;
+  for (let left = into.size; squash.status !== 0 && left > 0 && emptied(); left--) {
+    log(`  the port's ${git(["log", "-1", "--format=%h %s", "HEAD"], at)} formats to nothing`);
+    git(["reset", "-q", "--soft", "HEAD^"], at);
+    squash = run("git", [...quiet, "rebase", "--continue"], folding);
+  }
   if (squash.status !== 0) {
     run("git", ["rebase", "--abort"], { ...at, quiet: true });
     throw new StepFailure(
