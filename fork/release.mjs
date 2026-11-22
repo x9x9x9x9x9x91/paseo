@@ -142,6 +142,7 @@ export const TOOLS_PARTS = new Set([
   "pickBuildHost",
   "hostRun",
   "rsync",
+  "takeFormattedPort",
   "RUN_ARTIFACTS",
   "dropArtifacts",
   "shellQuote",
@@ -166,6 +167,9 @@ export const TOOLS_PARTS = new Set([
   "rebaseOnto",
   "leaveStoppedRebase",
   "keepUpToStop",
+  "PORT_REF",
+  "formatPort",
+  "runFormatter",
   "pruneRuns",
   "retireLaunchAgent",
   "work",
@@ -227,6 +231,8 @@ const HOST_PATH =
   "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 // The branch the candidate is pushed to on the build host's clone.
 const HOST_REF = "refs/heads/fork-candidate";
+// The candidate with its port formatted, which the signing Mac fetches back from the build host.
+const PORT_REF = "refs/heads/fork-formatted";
 // ns-with-max-lock's "gave up waiting" and ssh's "could not connect": the host is busy or away,
 // which is not the candidate's failure.
 const HOST_AWAY = new Set([75, 255]);
@@ -1385,7 +1391,7 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
   const outcome = existsSync(resultFile) ? JSON.parse(readFileSync(resultFile, "utf8")) : null;
   if (outcome?.ok) {
     log(`  ${phase} on ${host} ok (${Math.round((Date.now() - started) / 1000)} s)`);
-    return;
+    return outcome;
   }
   if (outcome) {
     const logFile = outcome.log ? path.join(runDir, outcome.log) : null;
@@ -1396,6 +1402,28 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
     `the ${phase} half on ${host} ended with exit ${result.status} and no result`,
     path.join(runDir, `${step}.log`),
   );
+}
+
+/**
+ * The port the build host formatted (formatPort) becomes the candidate here, the commit it
+ * checked and built, so the signed app and the pushed branch are that one. Returns the release's
+ * features, read again from a new port, since a commit the fold dropped leaves them too.
+ */
+function takeFormattedPort({ ctx, formatOnto, head, features, runDir }) {
+  const host = ctx.host;
+  if (!formatOnto || !head || head === git(["rev-parse", "HEAD"], { runDir })) return features;
+  withHost(host, runDir, () =>
+    git(["fetch", "-q", "--no-tags", `${host}:${HOST_ROOT}/build`, `+${PORT_REF}:${PORT_REF}`], {
+      step: "build-host",
+      runDir,
+      timeoutMs: 30 * 60_000,
+    }),
+  );
+  if (git(["rev-parse", PORT_REF], { runDir }) !== head) {
+    throw new StepFailure("build-host", `${host}'s formatted port is not the ${head} it built`);
+  }
+  git(["checkout", "-q", "-f", "--detach", head], { runDir });
+  return featureSubjects(commitSubjects(`${formatOnto}..HEAD`, runDir));
 }
 
 // The heavy files of a run folder: the app's archives, the release, signing and checking.
@@ -1625,8 +1653,15 @@ function hostPhase(phase, runName) {
     const env = nodeEnv(job.nodeMajor, runDir);
     if (phase === "app") {
       log(`${runName}: checking and building ${job.version}`);
+      // A fold (formatPort) a run could not abort leaves its rebase, whose abort after the
+      // checkout would put back that run's commit.
+      if (rebaseInProgress()) run("git", ["rebase", "--abort"], { runDir, quiet: true });
       checkoutCandidate({ runDir });
       runSteps(PREPARE_STEPS, { runDir, env });
+      if (job.formatOnto) {
+        result.head = formatPort(job.formatOnto, { runDir, env });
+        git(["update-ref", PORT_REF, result.head], { runDir });
+      }
       if (job.checks) gate({ runDir, env, ...job.checks });
       buildApp({ version: job.version, owner: job.owner, runDir, env });
     } else if (phase === "package") {
@@ -2077,6 +2112,104 @@ function keepUpToStop({ start, base, head, record, runDir, cwd }) {
 }
 
 /**
+ * On the build host, after the install: formats a port the job's rebase wrote with upstream's own
+ * formatter at `tag` (`npm run format`), as the gate's format check reads it, since the conflict
+ * agent works where there is no node_modules and may run no formatter, so a port it wrote by hand
+ * can fail that check (ALM-5239). What the formatter rewrites in a file the branch changes on
+ * `tag` is folded into the last branch commit that changes that file, so no later commit replays
+ * over it and every commit keeps its message and author, but for one whose whole change the
+ * formatter undoes, which leaves the port; a file the branch leaves alone stays as upstream has it,
+ * for the check to judge. Returns HEAD, a new commit when anything was folded.
+ */
+export function formatPort(tag, { runDir, cwd = BUILD, env = {}, format = runFormatter } = {}) {
+  const at = { runDir, cwd };
+  // Paths go to git as they are: a bracket or a leading colon is no pattern, and no list is trimmed.
+  const literal = { ...at, env: { GIT_LITERAL_PATHSPECS: "1" } };
+  const names = (args) => {
+    const listed = spawnSync("git", ["-c", "core.quotePath=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    if (listed.status !== 0) {
+      const why = `exit ${listed.status}: ${listed.stderr?.trim() ?? ""}`;
+      throw new StepFailure("format-port", `git ${args.join(" ")}: ${why}`);
+    }
+    return listed.stdout.split("\0").filter(Boolean);
+  };
+  const port = new Set(names(["diff", "--name-only", "-z", "--no-renames", tag, "HEAD"]));
+  format({ runDir, cwd, env });
+  const rewritten = names(["diff", "--name-only", "-z", "--no-renames"]);
+  const upstreams = rewritten.filter((file) => !port.has(file));
+  if (upstreams.length > 0) git(["checkout", "-q", "--", ...upstreams], literal);
+  const ours = rewritten.filter((file) => port.has(file));
+  if (ours.length === 0) return git(["rev-parse", "HEAD"], at);
+  // The folds are committed as the port's own committer, which the build host has no config for.
+  const [name, email] = git(["log", "-1", "--format=%cn%x00%ce", "HEAD"], at).split("\0");
+  const identity = {
+    GIT_LITERAL_PATHSPECS: "1",
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  };
+  const quiet = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"];
+  const into = new Map();
+  for (const file of ours) {
+    const last = git(["log", "-1", "--format=%H", `${tag}..HEAD`, "--", file], literal);
+    into.set(last, [...(into.get(last) ?? []), file]);
+  }
+  for (const [commit, files] of into) {
+    git([...quiet, "commit", "-q", "--no-verify", "-m", `fixup! ${commit}`, "--", ...files], {
+      ...at,
+      env: identity,
+    });
+  }
+  const formatted = git(["rev-parse", "HEAD^{tree}"], at);
+  const folding = {
+    step: "format-port",
+    ...at,
+    quiet: true,
+    env: { ...identity, GIT_SEQUENCE_EDITOR: ":", GIT_EDITOR: ":" },
+  };
+  let squash = run("git", [...quiet, "rebase", "-q", "-i", "--autosquash", tag], folding);
+  // A commit whose whole change the formatter undoes folds to nothing, which git refuses to
+  // amend: that commit leaves the port, the commit being amended dropped and the fold carried on.
+  const emptied = () =>
+    rebaseInProgress(cwd) &&
+    run("git", ["diff", "--cached", "--quiet", "HEAD^"], { ...at, quiet: true }).status === 0;
+  for (let left = into.size; squash.status !== 0 && left > 0 && emptied(); left--) {
+    log(`  the port's ${git(["log", "-1", "--format=%h %s", "HEAD"], at)} formats to nothing`);
+    git(["reset", "-q", "--soft", "HEAD^"], at);
+    squash = run("git", [...quiet, "rebase", "--continue"], folding);
+  }
+  if (squash.status !== 0) {
+    run("git", ["rebase", "--abort"], { ...at, quiet: true });
+    throw new StepFailure(
+      "format-port",
+      `folding the formatter's rewrite of ${ours.join(", ")} into the port failed: ${squash.output}`,
+      runDir ? path.join(runDir, "format-port.log") : null,
+    );
+  }
+  if (git(["rev-parse", "HEAD^{tree}"], at) !== formatted) {
+    throw new StepFailure("format-port", "the folded port is not the formatted tree");
+  }
+  log(`  formatted the port: ${ours.join(", ")}`);
+  return git(["rev-parse", "HEAD"], at);
+}
+
+function runFormatter({ runDir, cwd, env }) {
+  run("npm", ["run", "format"], {
+    step: "format-port",
+    runDir,
+    cwd,
+    env,
+    stream: true,
+    timeoutMs: 30 * 60_000,
+  });
+}
+
+/**
  * The newest KEEP_RUNS run folders stay for their logs, and of their heavy files (RUN_ARTIFACTS)
  * only those of the newest run that has any: a dry run keeps its release for a look until the
  * next one ends, and the older dry run's 1.8 GiB goes then (ALM-5078). runOnce prunes before and
@@ -2120,6 +2253,7 @@ function release({
   checks = null,
   handover = false,
   gateOnly = false,
+  formatOnto = null,
 }) {
   // A draft is what an earlier run of this job left when it died mid-publish.
   const ours = (entry) => /-fork\.\d+$/.test(entry.tag);
@@ -2140,9 +2274,10 @@ function release({
   else if (handover) what = `, updating from ${owner}`;
   log(`  building ${ctx.version}${what} on ${ctx.host}`);
   const version = ctx.version;
-  const job = { version, owner, nodeMajor: nodeMajor(ctx.latestTag, runDir), checks };
+  const job = { version, owner, nodeMajor: nodeMajor(ctx.latestTag, runDir), checks, formatOnto };
   prepareHost({ host: ctx.host, tag: ctx.latestTag, runDir, job });
-  runHostPhase({ host: ctx.host, phase: "app", runDir, timeoutMs: 4 * 60 * 60_000 });
+  const built = runHostPhase({ host: ctx.host, phase: "app", runDir, timeoutMs: 4 * 60 * 60_000 });
+  features = takeFormattedPort({ ctx, formatOnto, head: built.head, features, runDir });
   if (gateOnly) {
     log(`  checked and built ${ctx.version} unsigned; the app stays ${ctx.publishedVersion}`);
     return;
@@ -2271,7 +2406,9 @@ function work({ ctx, options, plan, runDir }) {
   const checks = { specs: branchSpecs(ctx.latestTag, { runDir }) };
   // A replay that leaves out a superseded commit makes a new app, whatever the head changed.
   const gateOnly = plan === "gate" && !rebasing;
-  release({ ctx, options, runDir, features, checks, gateOnly });
+  // A port the rebase wrote is formatted on the build host before the gate (formatPort).
+  const formatOnto = rebasing ? ctx.latestTag : null;
+  release({ ctx, options, runDir, features, checks, gateOnly, formatOnto });
   return gateOnly ? "gated" : "published";
 }
 
