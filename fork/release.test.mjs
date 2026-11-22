@@ -1224,8 +1224,8 @@ function formatRepo(t) {
   const out = (...args) => spawnSync("git", args, { cwd: repo, encoding: "utf8" }).stdout.trimEnd();
   const root = mkdtempSync(path.join(os.tmpdir(), "fork-root-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const formatPort = (rewrites) => {
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", FORMAT_RUN], {
+  const tryFormat = (rewrites) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", FORMAT_RUN], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -1234,10 +1234,12 @@ function formatRepo(t) {
         RUN: JSON.stringify({ cwd: repo, rewrites }),
       },
     });
+  const formatPort = (rewrites) => {
+    const result = tryFormat(rewrites);
     assert.equal(result.status, 0, result.stderr);
     return result.stdout.trim().split("\n").at(-1);
   };
-  return { repo, write, commit, out, formatPort };
+  return { repo, git, write, commit, out, formatPort, tryFormat };
 }
 
 test("a port the formatter rewrites is folded into the last commit that changes each file", (t) => {
@@ -1265,20 +1267,247 @@ test("a port the formatter rewrites is folded into the last commit that changes 
 test("a commit whose whole change the formatter undoes leaves the port, a bracketed path folds", (t) => {
   const { write, commit, out, formatPort } = formatRepo(t);
   const bracketed = "packages/app/src/[id]/c.ts";
+  // As a glob, the bracketed path names this one too, which a later commit changes.
+  const sibling = "packages/app/src/i/c.ts";
   write(FIRST, "upstream's a \n");
   commit("fix(app): a's spacing, as the agent left it");
   write(SECOND, "the fork's b\n");
   write(bracketed, "the fork's c,  as the agent left it\n");
   commit("feat(app): the fork's b and c");
+  write(sibling, "the fork's i\n");
+  commit("feat(app): the fork's i");
   const head = formatPort({
     [FIRST]: "upstream's a\n",
     [bracketed]: "the fork's c, formatted\n",
   });
   assert.equal(out("rev-parse", "HEAD"), head);
-  assert.equal(out("log", "--format=%s", "v0.11.4..HEAD"), "feat(app): the fork's b and c");
+  assert.equal(
+    out("log", "--format=%s", "v0.11.4..HEAD"),
+    "feat(app): the fork's i\nfeat(app): the fork's b and c",
+  );
   assert.equal(out("status", "--porcelain"), "");
   assert.equal(out("show", "HEAD:" + FIRST), "upstream's a");
-  assert.equal(out("show", "HEAD:" + bracketed), "the fork's c, formatted");
+  assert.equal(out("show", "HEAD~1:" + bracketed), "the fork's c, formatted");
+  assert.equal(out("diff", "--name-only", "HEAD~1", "HEAD"), sibling);
+});
+
+test("a file a commit of the port renames folds into that commit", (t) => {
+  const { git, write, commit, out, formatPort } = formatRepo(t);
+  const renamed = "packages/app/src/renamed.ts";
+  git("mv", FIRST, renamed);
+  commit("refactor(app): a renamed");
+  write(SECOND, "the fork's b\n");
+  commit("feat(app): the fork's b");
+  const head = formatPort({ [renamed]: "upstream's a, formatted\n" });
+  assert.equal(out("rev-parse", "HEAD"), head);
+  assert.equal(
+    out("log", "--format=%s", "v0.11.4..HEAD"),
+    "feat(app): the fork's b\nrefactor(app): a renamed",
+  );
+  assert.equal(out("status", "--porcelain"), "");
+  assert.equal(out("show", "HEAD~1:" + renamed), "upstream's a, formatted");
+  assert.equal(out("ls-tree", "--name-only", "HEAD~1", "--", FIRST), "");
+  assert.equal(out("diff", "--name-only", "HEAD~1", "HEAD"), SECOND);
+});
+
+test("a path with a space or a leading colon folds into its own commit", (t) => {
+  const { write, commit, out, formatPort } = formatRepo(t);
+  const spaced = "packages/app/src/a b.ts";
+  // As a pathspec, ":x.ts" is the plain x.ts, which a later commit changes.
+  write(spaced, "the fork's a b,  as the agent left it\n");
+  write(":x.ts", "the fork's :x,  as the agent left it\n");
+  commit("feat(app): the fork's a b and :x");
+  write("x.ts", "the fork's x\n");
+  commit("feat(app): the fork's x");
+  const head = formatPort({
+    [spaced]: "the fork's a b, formatted\n",
+    ":x.ts": "the fork's :x, formatted\n",
+  });
+  assert.equal(out("rev-parse", "HEAD"), head);
+  assert.equal(
+    out("log", "--format=%s", "v0.11.4..HEAD"),
+    "feat(app): the fork's x\nfeat(app): the fork's a b and :x",
+  );
+  assert.equal(out("status", "--porcelain"), "");
+  assert.equal(out("show", "HEAD~1:" + spaced), "the fork's a b, formatted");
+  assert.equal(out("show", "HEAD~1::x.ts"), "the fork's :x, formatted");
+  assert.equal(out("diff", "--name-only", "HEAD~1", "HEAD"), "x.ts");
+});
+
+// A port with a merge, which the fold's rebase lays out flat: `side` and the branch both change
+// SECOND, and `merge` makes the merge commit, `extra` a change of the merge's own.
+function mergedPort({ repo, git, write, commit }, { extra = null } = {}) {
+  write(FIRST, "the fork's a,  as the agent left it\n");
+  commit("feat(app): the fork's a");
+  git("checkout", "-q", "-b", "side", "v0.11.4");
+  write(SECOND, "the side's b\n");
+  commit("feat(app): the side's b");
+  git("checkout", "-q", "-");
+  if (extra) {
+    git("merge", "-q", "--no-ff", "--no-commit", "side");
+    write(extra, "the merge's own change\n");
+    commit("Merge the side");
+  } else {
+    write(SECOND, "the branch's b\n");
+    commit("feat(app): the branch's b");
+    const merged = spawnSync("git", ["merge", "-q", "--no-ff", "--no-commit", "side"], {
+      cwd: repo,
+    });
+    assert.notEqual(merged.status, 0, "the side's b conflicts with the branch's");
+    write(SECOND, "the branch's and the side's b\n");
+    commit("Merge the side");
+  }
+}
+
+test("a fold whose rebase stops is aborted, the clone left clean", (t) => {
+  const fixture = formatRepo(t);
+  const { repo, out, tryFormat } = fixture;
+  mergedPort(fixture);
+  const before = out("rev-parse", "HEAD");
+  const result = tryFormat({ [FIRST]: "the fork's a, formatted\n" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /folding the formatter's rewrite of packages\/app\/src\/a\.ts/);
+  for (const dir of ["rebase-merge", "rebase-apply"]) {
+    assert.equal(existsSync(path.join(repo, ".git", dir)), false, `${dir} is left`);
+  }
+  assert.equal(out("status", "--porcelain"), "");
+  assert.equal(out("rev-parse", "HEAD~1"), before);
+  assert.equal(out("show", "HEAD:" + FIRST), "the fork's a, formatted");
+});
+
+test("a fold that loses a change of the port fails the step", (t) => {
+  const fixture = formatRepo(t);
+  const { out, tryFormat } = fixture;
+  mergedPort(fixture, { extra: "packages/app/src/merged.ts" });
+  const result = tryFormat({ [FIRST]: "the fork's a, formatted\n" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /the folded port is not the formatted tree/);
+  assert.equal(out("ls-tree", "--name-only", "HEAD", "--", "packages/app/src/merged.ts"), "");
+});
+
+// The signing Mac's takeFormattedPort in a child process, its job folder the test's own.
+const TAKE_RUN = `
+const { takeFormattedPort } = await import(process.env.JOB_URL);
+const { head, runDir } = JSON.parse(process.env.RUN);
+const before = ["the features before the fold"];
+const features = takeFormattedPort({ ctx: { host: "build-host" }, formatOnto: "v0.11.4", head, features: before, runDir });
+process.stdout.write("\\n" + JSON.stringify(features) + "\\n");
+`;
+
+// What the build host's app half runs, as a fixture's own package scripts: npm ci leaves electron's
+// installer, the formatter writes the port's formatted text, the build writes a signing plan.
+const HOST_SCRIPTS = {
+  "package.json": `${JSON.stringify({
+    name: "fixture",
+    private: true,
+    scripts: { format: "node scripts/format.mjs", "build:desktop": "node scripts/build.mjs" },
+  })}\n`,
+  ".gitignore": "node_modules/\npackages/desktop/release/\n",
+  "packages/desktop/package.json": `${JSON.stringify({ name: "desktop", version: "0.11.4" })}\n`,
+  "scripts/npm-retry.mjs": `import { mkdirSync, writeFileSync } from "node:fs";
+mkdirSync("node_modules/electron", { recursive: true });
+writeFileSync("node_modules/electron/install.js", "");
+`,
+  "scripts/format.mjs": `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(FIRST)}, "the fork's a, formatted\\n");
+writeFileSync(${JSON.stringify(SECOND)}, "upstream's b\\n");
+`,
+  "scripts/build.mjs": `import { mkdirSync, writeFileSync } from "node:fs";
+writeFileSync(process.env.PASEO_FORK_SIGN_PLAN, "{}\\n");
+mkdirSync("packages/desktop/release/mac-arm64/Paseo.app", { recursive: true });
+`,
+};
+
+test("the port the build host formats is the head the signing Mac takes and pushes", (t) => {
+  const { repo, git, write, commit, out } = formatRepo(t);
+  for (const [file, text] of Object.entries(HOST_SCRIPTS)) write(file, text);
+  commit("upstream's scripts");
+  git("tag", "-f", "v0.11.4");
+  write(FIRST, "the fork's a,  as the agent left it\n");
+  commit("feat(app): the fork's a");
+  write(SECOND, "upstream's b \n");
+  commit("fix(app): b's spacing, as the agent left it");
+  write("fork/job.mjs", "the job\n");
+  commit("fork: the job's own file");
+  const candidate = out("rev-parse", "HEAD");
+  git("update-ref", "refs/heads/fork-candidate", candidate);
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "fork-hosts-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const hostRoot = path.join(scratch, "host");
+  const signRoot = path.join(scratch, "sign");
+  const runName = "2026-11-22T03-00-00";
+  mkdirSync(path.join(hostRoot, "runs", runName), { recursive: true });
+  mkdirSync(path.join(signRoot, "runs", runName), { recursive: true });
+  symlinkSync(repo, path.join(hostRoot, "build"));
+  // The signing Mac's clone stands at the candidate it sent, as the formatter left it alone.
+  const cloned = spawnSync("git", ["clone", "-q", repo, path.join(signRoot, "build")]);
+  assert.equal(cloned.status, 0, String(cloned.stderr));
+  const job = { version: "0.11.4-fork.1", owner: "fork", nodeMajor: 22, checks: null };
+  writeFileSync(
+    path.join(hostRoot, "runs", runName, "host-job.json"),
+    JSON.stringify({ ...job, formatOnto: "v0.11.4" }),
+  );
+  // brew, ditto and ssh stand in for the Mac's own; the host's home holds its job folder.
+  const bin = path.join(scratch, "bin");
+  const home = path.join(scratch, "home");
+  mkdirSync(bin);
+  mkdirSync(path.join(home, "Coding/_forks"), { recursive: true });
+  symlinkSync(hostRoot, path.join(home, "Coding/_forks/paseo-release"));
+  writeFileSync(path.join(bin, "brew"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  writeFileSync(path.join(bin, "ditto"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const fakeSsh = path.join(bin, "fake-ssh");
+  writeFileSync(
+    fakeSsh,
+    [
+      "#!/bin/sh",
+      "for last; do :; done",
+      'cd "$FAKE_HOME" || exit 1',
+      'case "$last" in',
+      '  "git-upload-pack "*) eval "exec git upload-pack ${last#git-upload-pack }" ;;',
+      "  *) exit 2 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const jobUrl = new URL("./release.mjs", import.meta.url);
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  const host = spawnSync(
+    process.execPath,
+    [fileURLToPath(jobUrl), "--build-host", "app", runName],
+    { encoding: "utf8", env: { ...env, PASEO_FORK_ROOT: hostRoot } },
+  );
+  const resultFile = path.join(hostRoot, "runs", runName, "host-result-app.json");
+  const result = JSON.parse(readFileSync(resultFile, "utf8"));
+  assert.equal(host.status, 0, `${host.stdout}${host.stderr}${JSON.stringify(result)}`);
+  assert.equal(result.ok, true);
+  assert.notEqual(result.head, candidate);
+  assert.equal(out("rev-parse", "refs/heads/fork-formatted"), result.head);
+  assert.equal(
+    out("log", "--format=%s", `v0.11.4..${result.head}`),
+    "fork: the job's own file\nfeat(app): the fork's a",
+  );
+  assert.equal(out("show", `${result.head}:${FIRST}`), "the fork's a, formatted");
+  assert.equal(out("show", `${result.head}:${SECOND}`), "upstream's b");
+  const sign = spawnSync(process.execPath, ["--input-type=module", "-e", TAKE_RUN], {
+    encoding: "utf8",
+    env: {
+      ...env,
+      PASEO_FORK_ROOT: signRoot,
+      JOB_URL: jobUrl.href,
+      RUN: JSON.stringify({ head: result.head, runDir: path.join(signRoot, "runs", runName) }),
+      GIT_SSH_COMMAND: fakeSsh,
+      GIT_SSH_VARIANT: "simple",
+      FAKE_HOME: home,
+    },
+  });
+  assert.equal(sign.status, 0, `${sign.stdout}${sign.stderr}`);
+  // release() pushes and tags HEAD: the head the build host checked, built and formatted.
+  assert.deepEqual(JSON.parse(sign.stdout.trim().split("\n").at(-1)), ["feat(app): the fork's a"]);
+  const signing = (...args) =>
+    spawnSync("git", args, { cwd: path.join(signRoot, "build"), encoding: "utf8" }).stdout.trim();
+  assert.equal(signing("rev-parse", "HEAD"), result.head);
+  assert.equal(signing("status", "--porcelain"), "");
 });
 
 test("a port the formatter leaves alone keeps its head", (t) => {
