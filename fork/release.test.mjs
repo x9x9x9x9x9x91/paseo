@@ -1388,32 +1388,57 @@ test("a fold that loses a change of the port fails the step", (t) => {
 // The signing Mac's takeFormattedPort in a child process, its job folder the test's own.
 const TAKE_RUN = `
 const { takeFormattedPort } = await import(process.env.JOB_URL);
-const { head, runDir } = JSON.parse(process.env.RUN);
+const { head, runDir, formatOnto = "v0.11.4" } = JSON.parse(process.env.RUN);
 const before = ["the features before the fold"];
-const features = takeFormattedPort({ ctx: { host: "build-host" }, formatOnto: "v0.11.4", head, features: before, runDir });
-process.stdout.write("\\n" + JSON.stringify(features) + "\\n");
+const features = takeFormattedPort({ ctx: { host: "build-host" }, formatOnto, head, features: before, runDir });
+process.stdout.write("\\n" + JSON.stringify({ features, same: features === before }) + "\\n");
 `;
 
 // What the build host's app half runs, as a fixture's own package scripts: npm ci leaves electron's
-// installer, the formatter writes the port's formatted text, the build writes a signing plan.
+// installer and playwright, the formatter writes the port's formatted text, the gate's format
+// check copies the text of a it checked to FIXTURE_GATE_SAW, the build copies the text of a it
+// built into its signing plan, and every other check passes.
 const HOST_SCRIPTS = {
   "package.json": `${JSON.stringify({
     name: "fixture",
     private: true,
-    scripts: { format: "node scripts/format.mjs", "build:desktop": "node scripts/build.mjs" },
+    workspaces: ["packages/app", "packages/expo-two-way-audio"],
+    scripts: {
+      format: "node scripts/format.mjs",
+      "format:check": "node scripts/gate.mjs",
+      lint: "true",
+      "build:server": "true",
+      typecheck: "true",
+      "build:app-deps": "true",
+      "build:desktop": "node scripts/build.mjs",
+    },
   })}\n`,
   ".gitignore": "node_modules/\npackages/desktop/release/\n",
+  "packages/app/package.json": `${JSON.stringify({ name: "@getpaseo/app", scripts: { test: "true" } })}\n`,
+  "packages/expo-two-way-audio/package.json": `${JSON.stringify({
+    name: "@getpaseo/expo-two-way-audio",
+    scripts: { build: "true" },
+  })}\n`,
   "packages/desktop/package.json": `${JSON.stringify({ name: "desktop", version: "0.11.4" })}\n`,
+  "fork/release.test.mjs": `import { test } from "node:test";
+test("the fixture's release tests", () => {});
+`,
   "scripts/npm-retry.mjs": `import { mkdirSync, writeFileSync } from "node:fs";
 mkdirSync("node_modules/electron", { recursive: true });
 writeFileSync("node_modules/electron/install.js", "");
+mkdirSync("node_modules/.bin", { recursive: true });
+writeFileSync("node_modules/.bin/playwright", "#!/bin/sh\\nexit 0\\n", { mode: 0o755 });
 `,
   "scripts/format.mjs": `import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(FIRST)}, "the fork's a, formatted\\n");
 writeFileSync(${JSON.stringify(SECOND)}, "upstream's b\\n");
 `,
-  "scripts/build.mjs": `import { mkdirSync, writeFileSync } from "node:fs";
-writeFileSync(process.env.PASEO_FORK_SIGN_PLAN, "{}\\n");
+  "scripts/gate.mjs": `import { readFileSync, writeFileSync } from "node:fs";
+writeFileSync(process.env.FIXTURE_GATE_SAW, readFileSync(${JSON.stringify(FIRST)}, "utf8"));
+`,
+  "scripts/build.mjs": `import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const a = readFileSync(${JSON.stringify(FIRST)}, "utf8");
+writeFileSync(process.env.PASEO_FORK_SIGN_PLAN, JSON.stringify({ a }) + "\\n");
 mkdirSync("packages/desktop/release/mac-arm64/Paseo.app", { recursive: true });
 `,
 };
@@ -1442,7 +1467,7 @@ test("the port the build host formats is the head the signing Mac takes and push
   // The signing Mac's clone stands at the candidate it sent, as the formatter left it alone.
   const cloned = spawnSync("git", ["clone", "-q", repo, path.join(signRoot, "build")]);
   assert.equal(cloned.status, 0, String(cloned.stderr));
-  const job = { version: "0.11.4-fork.1", owner: "fork", nodeMajor: 22, checks: null };
+  const job = { version: "0.11.4-fork.1", owner: "fork", nodeMajor: 22, checks: { specs: [] } };
   writeFileSync(
     path.join(hostRoot, "runs", runName, "host-job.json"),
     JSON.stringify({ ...job, formatOnto: "v0.11.4" }),
@@ -1472,10 +1497,11 @@ test("the port the build host formats is the head the signing Mac takes and push
   );
   const jobUrl = new URL("./release.mjs", import.meta.url);
   const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  const gateSaw = path.join(scratch, "gate-saw");
   const host = spawnSync(
     process.execPath,
     [fileURLToPath(jobUrl), "--build-host", "app", runName],
-    { encoding: "utf8", env: { ...env, PASEO_FORK_ROOT: hostRoot } },
+    { encoding: "utf8", env: { ...env, PASEO_FORK_ROOT: hostRoot, FIXTURE_GATE_SAW: gateSaw } },
   );
   const resultFile = path.join(hostRoot, "runs", runName, "host-result-app.json");
   const result = JSON.parse(readFileSync(resultFile, "utf8"));
@@ -1489,6 +1515,10 @@ test("the port the build host formats is the head the signing Mac takes and push
   );
   assert.equal(out("show", `${result.head}:${FIRST}`), "the fork's a, formatted");
   assert.equal(out("show", `${result.head}:${SECOND}`), "upstream's b");
+  // The gate checks and the build builds the formatted tree, which hostPhase formats first.
+  assert.equal(readFileSync(gateSaw, "utf8"), "the fork's a, formatted\n");
+  const plan = JSON.parse(readFileSync(path.join(hostRoot, "runs", runName, "sign-plan.json")));
+  assert.equal(plan.a, "the fork's a, formatted\n");
   const sign = spawnSync(process.execPath, ["--input-type=module", "-e", TAKE_RUN], {
     encoding: "utf8",
     env: {
@@ -1503,11 +1533,61 @@ test("the port the build host formats is the head the signing Mac takes and push
   });
   assert.equal(sign.status, 0, `${sign.stdout}${sign.stderr}`);
   // release() pushes and tags HEAD: the head the build host checked, built and formatted.
-  assert.deepEqual(JSON.parse(sign.stdout.trim().split("\n").at(-1)), ["feat(app): the fork's a"]);
+  assert.deepEqual(JSON.parse(sign.stdout.trim().split("\n").at(-1)).features, [
+    "feat(app): the fork's a",
+  ]);
   const signing = (...args) =>
     spawnSync("git", args, { cwd: path.join(signRoot, "build"), encoding: "utf8" }).stdout.trim();
   assert.equal(signing("rev-parse", "HEAD"), result.head);
   assert.equal(signing("status", "--porcelain"), "");
+});
+
+test("the signing Mac fetches no port when there is none or it already stands at it", (t) => {
+  const { repo, write, commit, out } = formatRepo(t);
+  write(FIRST, "the fork's a\n");
+  commit("feat(app): the fork's a");
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "fork-hosts-"));
+  t.after(() => rmSync(scratch, { recursive: true, force: true }));
+  const signRoot = path.join(scratch, "sign");
+  const runDir = path.join(signRoot, "runs", "2026-11-22T03-00-00");
+  mkdirSync(runDir, { recursive: true });
+  const cloned = spawnSync("git", ["clone", "-q", repo, path.join(signRoot, "build")]);
+  assert.equal(cloned.status, 0, String(cloned.stderr));
+  const signing = (...args) =>
+    spawnSync("git", args, { cwd: path.join(signRoot, "build"), encoding: "utf8" }).stdout.trim();
+  const head = signing("rev-parse", "HEAD");
+  // Any ssh, the build host's fetch's too, leaves a mark and fails.
+  const called = path.join(scratch, "ssh-called");
+  const failSsh = path.join(scratch, "fail-ssh");
+  writeFileSync(failSsh, `#!/bin/sh\necho "$@" >> "${called}"\nexit 1\n`, { mode: 0o755 });
+  const take = (formatOnto, portHead) =>
+    spawnSync(process.execPath, ["--input-type=module", "-e", TAKE_RUN], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PASEO_FORK_ROOT: signRoot,
+        JOB_URL: new URL("./release.mjs", import.meta.url).href,
+        RUN: JSON.stringify({ head: portHead, runDir, formatOnto }),
+        GIT_SSH_COMMAND: failSsh,
+        GIT_SSH_VARIANT: "simple",
+      },
+    });
+  const other = out("rev-parse", "HEAD~1");
+  for (const [formatOnto, portHead] of [
+    [null, other],
+    ["v0.11.4", head],
+    ["v0.11.4", null],
+  ]) {
+    const sign = take(formatOnto, portHead);
+    assert.equal(sign.status, 0, `${sign.stdout}${sign.stderr}`);
+    assert.deepEqual(JSON.parse(sign.stdout.trim().split("\n").at(-1)), {
+      features: ["the features before the fold"],
+      same: true,
+    });
+    assert.equal(signing("rev-parse", "HEAD"), head);
+    assert.equal(signing("for-each-ref", "refs/heads/fork-formatted"), "");
+  }
+  assert.equal(existsSync(called), false);
 });
 
 test("a port the formatter leaves alone keeps its head", (t) => {
