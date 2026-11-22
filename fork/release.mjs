@@ -1409,7 +1409,7 @@ function runHostPhase({ host, phase, runDir, timeoutMs }) {
  * checked and built, so the signed app and the pushed branch are that one. Returns the release's
  * features, read again from a new port, since a commit the fold dropped leaves them too.
  */
-function takeFormattedPort({ ctx, formatOnto, head, features, runDir }) {
+export function takeFormattedPort({ ctx, formatOnto, head, features, runDir }) {
   const host = ctx.host;
   if (!formatOnto || !head || head === git(["rev-parse", "HEAD"], { runDir })) return features;
   withHost(host, runDir, () =>
