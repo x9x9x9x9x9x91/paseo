@@ -59,10 +59,12 @@ import {
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
+  skipPattern,
   stageResolved,
   supersededBy,
   TOOLS_PARTS,
   topLevelParts,
+  UPSTREAM_FLAKES,
   withoutTrailers,
 } from "./release.mjs";
 import { FORK_IDENTITY, designatedRequirement, optionsFromPlan, signPlan } from "./sign-mac.cjs";
@@ -134,6 +136,13 @@ test("release.mjs reads as its declarations, every one of the job's own parts on
 test("a change to the job's own parts or comments changes no app, one to its build or release does", () => {
   const retry = jobWith(`"--retry=1"`, `"--retry=2"`);
   assert.deepEqual(appChanges(JOB, retry), []);
+  const flakes = jobWith(
+    `"preserves inspection through multiple real parser turns of queued output",`,
+    `"preserves inspection through multiple real parser turns of queued output",\n  "another flake",`,
+  );
+  assert.deepEqual(appChanges(JOB, flakes), []);
+  const pattern = jobWith("return `^(?!.*(?:", "return `^(?!(?:");
+  assert.deepEqual(appChanges(JOB, pattern), []);
   const comment = jobWith("// The fork's own commits", "// The fork's very own commits");
   assert.deepEqual(appChanges(JOB, comment), []);
   const prompt = jobWith("End your reply with one line", "End your answer with one line");
@@ -1698,14 +1707,47 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
   const withSpecs = byStep(["e2e/browser/a.spec.ts"]);
   assert.deepEqual(withSpecs["app-unit"], [
     "npm",
-    ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
+    [
+      "run",
+      "test",
+      "--workspace=@getpaseo/app",
+      "--",
+      "--retry=1",
+      "--reporter=verbose",
+      `--testNamePattern=${skipPattern(UPSTREAM_FLAKES)}`,
+    ],
   ]);
   assert.deepEqual(withSpecs.e2e, [
     "npm",
     ["run", "test:e2e", "--workspace=@getpaseo/app", "--", "e2e/browser/a.spec.ts"],
   ]);
   assert.equal(gateSteps([]).at(-1)[0], "two-way-audio");
+  // With no flake listed, app-unit leaves no test out: an empty pattern would match none.
+  assert.deepEqual(
+    Object.fromEntries(gateSteps([], []).map(([step, ...rest]) => [step, rest]))["app-unit"],
+    ["npm", ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"]],
+  );
   assert.equal(byStep([]).e2e, undefined);
+});
+
+test("the app-unit step leaves out only the upstream flakes it names", () => {
+  const pattern = new RegExp(skipPattern(UPSTREAM_FLAKES));
+  const flake = "preserves inspection through multiple real parser turns of queued output";
+  assert.ok(UPSTREAM_FLAKES.includes(flake));
+  assert.equal(pattern.test(flake), false);
+  assert.equal(pattern.test(`terminal find ${flake}`), false);
+  assert.equal(
+    pattern.test("closing Find cancels pending refreshes without clearing old or new selections"),
+    true,
+  );
+  assert.equal(pattern.test("routes Find and shell input through xterm with isMac=true"), true);
+  // A name's own regex characters are matched as written.
+  const literal = new RegExp(skipPattern(["a (b) [c]."]));
+  assert.equal(literal.test("x a (b) [c]. y"), false);
+  assert.equal(literal.test("a b c"), true);
+  // A list with no name, or with an empty one, would match no test at all.
+  assert.throws(() => skipPattern([]));
+  assert.throws(() => skipPattern(["named", " "]));
 });
 
 test("the app-unit step's log names the tests that passed only on their retry", () => {
