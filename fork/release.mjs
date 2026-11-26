@@ -131,6 +131,8 @@ export const TOOLS_PARTS = new Set([
   "pullInRelease",
   "upstreamPullsLanded",
   "closedPulls",
+  "UPSTREAM_FLAKES",
+  "skipPattern",
   "gateSteps",
   "retriedPasses",
   "gate",
@@ -957,12 +959,38 @@ function runSteps(steps, { runDir, env }) {
 }
 
 /**
+ * Upstream app tests the app-unit step leaves out by name, each a timing flake on the build Macs
+ * that a retry does not cover, and each with its reason and row.
+ */
+export const UPSTREAM_FLAKES = [
+  // terminal-find.browser.test.ts counts xterm's parser turns in 350 ms and wants more than one;
+  // it failed 3 of 5 runs alone on mini2, its one turn likely a fast Mac's (ALM-6950).
+  "preserves inspection through multiple real parser turns of queued output",
+];
+
+/**
+ * A vitest `--testNamePattern` that matches every test whose full name contains none of `names`,
+ * so the app-unit step runs all of the app's tests but those. It refuses an empty list or an
+ * empty name, either of which would match no test; gateSteps passes the flag only for a list with
+ * a name in it.
+ */
+export function skipPattern(names) {
+  if (names.length === 0 || names.some((name) => name.trim() === "")) {
+    throw new Error("skipPattern needs at least one test name, and no empty one");
+  }
+  const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `^(?!.*(?:${escaped.join("|")}))`;
+}
+
+/**
  * The checks the build host runs before the build, in order. The app's unit tests try a failed
  * test once more (vitest's `--retry=1`), so one upstream timing flake does not fail a run while a
  * test that fails twice still does (ALM-4585); the verbose reporter marks each test that needed
- * its retry, for retriedPasses.
+ * its retry, for retriedPasses. A flake that fails both tries on the build Macs is left out by
+ * name instead (UPSTREAM_FLAKES, skipPattern, ALM-6950); with none listed, no name is left out.
  */
-export function gateSteps(specs) {
+export function gateSteps(specs, flakes = UPSTREAM_FLAKES) {
+  const skip = flakes.length > 0 ? [`--testNamePattern=${skipPattern(flakes)}`] : [];
   const steps = [
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
     ["playwright", "npx", ["playwright", "install", "chromium"]],
@@ -975,7 +1003,15 @@ export function gateSteps(specs) {
     [
       "app-unit",
       "npm",
-      ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
+      [
+        "run",
+        "test",
+        "--workspace=@getpaseo/app",
+        "--",
+        "--retry=1",
+        "--reporter=verbose",
+        ...skip,
+      ],
     ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
   ];
