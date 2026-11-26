@@ -59,10 +59,12 @@ import {
   sameRequirement,
   shellLine,
   shouldSkipCandidate,
+  skipPattern,
   stageResolved,
   supersededBy,
   TOOLS_PARTS,
   topLevelParts,
+  UPSTREAM_FLAKES,
   withoutTrailers,
 } from "./release.mjs";
 import { FORK_IDENTITY, designatedRequirement, optionsFromPlan, signPlan } from "./sign-mac.cjs";
@@ -1698,7 +1700,15 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
   const withSpecs = byStep(["e2e/browser/a.spec.ts"]);
   assert.deepEqual(withSpecs["app-unit"], [
     "npm",
-    ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
+    [
+      "run",
+      "test",
+      "--workspace=@getpaseo/app",
+      "--",
+      "--retry=1",
+      "--reporter=verbose",
+      `--testNamePattern=${skipPattern(UPSTREAM_FLAKES)}`,
+    ],
   ]);
   assert.deepEqual(withSpecs.e2e, [
     "npm",
@@ -1706,6 +1716,23 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
   ]);
   assert.equal(gateSteps([]).at(-1)[0], "two-way-audio");
   assert.equal(byStep([]).e2e, undefined);
+});
+
+test("the app-unit step leaves out only the upstream flakes it names", () => {
+  const pattern = new RegExp(skipPattern(UPSTREAM_FLAKES));
+  const flake = "preserves inspection through multiple real parser turns of queued output";
+  assert.ok(UPSTREAM_FLAKES.includes(flake));
+  assert.equal(pattern.test(flake), false);
+  assert.equal(pattern.test(`terminal find ${flake}`), false);
+  assert.equal(
+    pattern.test("closing Find cancels pending refreshes without clearing old or new selections"),
+    true,
+  );
+  assert.equal(pattern.test("routes Find and shell input through xterm with isMac=true"), true);
+  // A name's own regex characters are matched as written.
+  const literal = new RegExp(skipPattern(["a (b) [c]."]));
+  assert.equal(literal.test("x a (b) [c]. y"), false);
+  assert.equal(literal.test("a b c"), true);
 });
 
 test("the app-unit step's log names the tests that passed only on their retry", () => {

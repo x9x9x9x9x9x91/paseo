@@ -957,10 +957,30 @@ function runSteps(steps, { runDir, env }) {
 }
 
 /**
+ * Upstream app tests the app-unit step leaves out by name, each a timing flake on the build Macs
+ * that a retry does not cover, and each with its reason and row.
+ */
+export const UPSTREAM_FLAKES = [
+  // terminal-find.browser.test.ts counts xterm's parser turns in 350 ms; a fast Mac parses the
+  // queued writes in one turn and sees one sample, failing 3 of 5 runs alone on mini2 (ALM-6950).
+  "preserves inspection through multiple real parser turns of queued output",
+];
+
+/**
+ * A vitest `--testNamePattern` that matches every test whose full name contains none of `names`,
+ * so the app-unit step runs all of the app's tests but those.
+ */
+export function skipPattern(names) {
+  const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return `^(?!.*(?:${escaped.join("|")}))`;
+}
+
+/**
  * The checks the build host runs before the build, in order. The app's unit tests try a failed
  * test once more (vitest's `--retry=1`), so one upstream timing flake does not fail a run while a
  * test that fails twice still does (ALM-4585); the verbose reporter marks each test that needed
- * its retry, for retriedPasses.
+ * its retry, for retriedPasses. A flake that fails both tries on the build Macs is left out by
+ * name instead (UPSTREAM_FLAKES, skipPattern, ALM-6950).
  */
 export function gateSteps(specs) {
   const steps = [
@@ -975,7 +995,15 @@ export function gateSteps(specs) {
     [
       "app-unit",
       "npm",
-      ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"],
+      [
+        "run",
+        "test",
+        "--workspace=@getpaseo/app",
+        "--",
+        "--retry=1",
+        "--reporter=verbose",
+        `--testNamePattern=${skipPattern(UPSTREAM_FLAKES)}`,
+      ],
     ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
   ];
