@@ -131,6 +131,8 @@ export const TOOLS_PARTS = new Set([
   "pullInRelease",
   "upstreamPullsLanded",
   "closedPulls",
+  "UPSTREAM_FLAKES",
+  "skipPattern",
   "gateSteps",
   "retriedPasses",
   "gate",
@@ -961,8 +963,8 @@ function runSteps(steps, { runDir, env }) {
  * that a retry does not cover, and each with its reason and row.
  */
 export const UPSTREAM_FLAKES = [
-  // terminal-find.browser.test.ts counts xterm's parser turns in 350 ms; a fast Mac parses the
-  // queued writes in one turn and sees one sample, failing 3 of 5 runs alone on mini2 (ALM-6950).
+  // terminal-find.browser.test.ts counts xterm's parser turns in 350 ms and wants more than one;
+  // it failed 3 of 5 runs alone on mini2, its one turn likely a fast Mac's (ALM-6950).
   "preserves inspection through multiple real parser turns of queued output",
 ];
 

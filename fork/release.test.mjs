@@ -136,6 +136,13 @@ test("release.mjs reads as its declarations, every one of the job's own parts on
 test("a change to the job's own parts or comments changes no app, one to its build or release does", () => {
   const retry = jobWith(`"--retry=1"`, `"--retry=2"`);
   assert.deepEqual(appChanges(JOB, retry), []);
+  const flakes = jobWith(
+    `"preserves inspection through multiple real parser turns of queued output",`,
+    `"preserves inspection through multiple real parser turns of queued output",\n  "another flake",`,
+  );
+  assert.deepEqual(appChanges(JOB, flakes), []);
+  const pattern = jobWith("return `^(?!.*(?:", "return `^(?!(?:");
+  assert.deepEqual(appChanges(JOB, pattern), []);
   const comment = jobWith("// The fork's own commits", "// The fork's very own commits");
   assert.deepEqual(appChanges(JOB, comment), []);
   const prompt = jobWith("End your reply with one line", "End your answer with one line");
