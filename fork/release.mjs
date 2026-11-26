@@ -970,10 +970,14 @@ export const UPSTREAM_FLAKES = [
 
 /**
  * A vitest `--testNamePattern` that matches every test whose full name contains none of `names`,
- * so the app-unit step runs all of the app's tests but those. Empty `names` would match no test,
- * so gateSteps passes the flag only for a list with a name in it.
+ * so the app-unit step runs all of the app's tests but those. It refuses an empty list or an
+ * empty name, either of which would match no test; gateSteps passes the flag only for a list with
+ * a name in it.
  */
 export function skipPattern(names) {
+  if (names.length === 0 || names.some((name) => name.trim() === "")) {
+    throw new Error("skipPattern needs at least one test name, and no empty one");
+  }
   const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return `^(?!.*(?:${escaped.join("|")}))`;
 }

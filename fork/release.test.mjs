@@ -1745,6 +1745,9 @@ test("the app-unit step leaves out only the upstream flakes it names", () => {
   const literal = new RegExp(skipPattern(["a (b) [c]."]));
   assert.equal(literal.test("x a (b) [c]. y"), false);
   assert.equal(literal.test("a b c"), true);
+  // A list with no name, or with an empty one, would match no test at all.
+  assert.throws(() => skipPattern([]));
+  assert.throws(() => skipPattern(["named", " "]));
 });
 
 test("the app-unit step's log names the tests that passed only on their retry", () => {
