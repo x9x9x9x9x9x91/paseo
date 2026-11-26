@@ -1722,6 +1722,11 @@ test("the app's unit tests try a failed test once more, and the e2e step runs on
     ["run", "test:e2e", "--workspace=@getpaseo/app", "--", "e2e/browser/a.spec.ts"],
   ]);
   assert.equal(gateSteps([]).at(-1)[0], "two-way-audio");
+  // With no flake listed, app-unit leaves no test out: an empty pattern would match none.
+  assert.deepEqual(
+    Object.fromEntries(gateSteps([], []).map(([step, ...rest]) => [step, rest]))["app-unit"],
+    ["npm", ["run", "test", "--workspace=@getpaseo/app", "--", "--retry=1", "--reporter=verbose"]],
+  );
   assert.equal(byStep([]).e2e, undefined);
 });
 

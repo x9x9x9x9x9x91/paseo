@@ -970,7 +970,8 @@ export const UPSTREAM_FLAKES = [
 
 /**
  * A vitest `--testNamePattern` that matches every test whose full name contains none of `names`,
- * so the app-unit step runs all of the app's tests but those.
+ * so the app-unit step runs all of the app's tests but those. Empty `names` would match no test,
+ * so gateSteps passes the flag only for a list with a name in it.
  */
 export function skipPattern(names) {
   const escaped = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -982,9 +983,10 @@ export function skipPattern(names) {
  * test once more (vitest's `--retry=1`), so one upstream timing flake does not fail a run while a
  * test that fails twice still does (ALM-4585); the verbose reporter marks each test that needed
  * its retry, for retriedPasses. A flake that fails both tries on the build Macs is left out by
- * name instead (UPSTREAM_FLAKES, skipPattern, ALM-6950).
+ * name instead (UPSTREAM_FLAKES, skipPattern, ALM-6950); with none listed, no name is left out.
  */
-export function gateSteps(specs) {
+export function gateSteps(specs, flakes = UPSTREAM_FLAKES) {
+  const skip = flakes.length > 0 ? [`--testNamePattern=${skipPattern(flakes)}`] : [];
   const steps = [
     // The browser the app's tests and the specs need, which moves with upstream's Playwright.
     ["playwright", "npx", ["playwright", "install", "chromium"]],
@@ -1004,7 +1006,7 @@ export function gateSteps(specs) {
         "--",
         "--retry=1",
         "--reporter=verbose",
-        `--testNamePattern=${skipPattern(UPSTREAM_FLAKES)}`,
+        ...skip,
       ],
     ],
     ["two-way-audio", "npm", ["run", "build", "--workspace=@getpaseo/expo-two-way-audio"]],
