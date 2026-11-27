@@ -39,6 +39,18 @@ export async function readRecordedNotifications(page: Page): Promise<RecordedNot
   }, RECORDED_NOTIFICATIONS_KEY);
 }
 
+/**
+ * Turns on the banner for a finished agent where Settings > Notifications has that switch:
+ * upstream v0.18.0 added it, off by default, and the spec raises its banners by finishing an
+ * agent (ALM-7034). A page with no such switch raises that banner always.
+ */
+export async function enableAgentFinishedNotifications(page: Page): Promise<void> {
+  const agentFinished = page.getByTestId("notifications-event-agentFinished-switch");
+  if ((await agentFinished.count()) === 0) return;
+  if ((await agentFinished.getAttribute("aria-checked")) !== "true") await agentFinished.click();
+  await expect(agentFinished).toHaveAttribute("aria-checked", "true");
+}
+
 /** Runs a mock agent in the workspace to its end, which raises its attention as it finishes. */
 export async function finishMockAgent(workspace: SeededWorkspace, title: string): Promise<void> {
   const agent = await workspace.client.createAgent({
