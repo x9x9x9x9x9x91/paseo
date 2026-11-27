@@ -37,7 +37,9 @@ import {
   HERE,
   hereName,
   holdForNotary,
+  hostLine,
   liveIsOpen,
+  maxSeat,
   nextForkNumber,
   nodeMajorFromWorkflow,
   notaryOutside,
@@ -715,6 +717,51 @@ test("the release program's sign gets the zip on stdin, its answer kept, its bus
   assert.equal(unsigned.step, "sign");
   assert.equal(unsigned.outside, false);
   assert.match(unsigned.message, /: substrate-release: the signing of Paseo\.app failed$/);
+});
+
+test("the build runs on the plain Mac by default, never on one of Night's Max seats", () => {
+  const env = { ...process.env };
+  delete env.PASEO_FORK_BUILD_HOSTS;
+  const url = new URL("./release.mjs", import.meta.url).href;
+  const read = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const { BUILD_HOSTS } = await import(${JSON.stringify(url)}); console.log(JSON.stringify(BUILD_HOSTS));`,
+    ],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(read.status, 0, read.stderr);
+  const hosts = JSON.parse(read.stdout);
+  assert.deepEqual(hosts, ["almatest@sincoder"]);
+  assert.ok(hosts.every((host) => !maxSeat(host)));
+});
+
+test("a Max seat named by hand takes the run under its Max lock, any other host under the job's own", () => {
+  for (const host of [
+    "mini2",
+    "mini3",
+    "mini4",
+    "alma@mini3",
+    "mini3.local",
+    "alma@mini4.ts.net",
+  ]) {
+    assert.ok(maxSeat(host), host);
+  }
+  for (const host of ["sincoder", "almatest@sincoder", "mini1", "mini22", "px1"]) {
+    assert.ok(!maxSeat(host), host);
+  }
+  const env = ["PATH=/usr/bin:/bin", "NS_LANE=guest:paseo-fork-release"];
+  const command = ["node", "tools/fork/release.mjs", "--build-host", "app", "run 1"];
+  assert.equal(
+    hostLine("mini3", env, command),
+    `cd 'Coding/_forks/paseo-release' && exec env ${shellLine(env)} "$HOME"/.local/bin/ns-with-max-lock ${shellLine(command)}`,
+  );
+  assert.equal(
+    hostLine("almatest@sincoder", env, command),
+    `cd 'Coding/_forks/paseo-release' && exec env ${shellLine(env)} '/usr/bin/lockf' '-t' '0' 'release.lock' ${shellLine(command)}`,
+  );
 });
 
 test("a notice names the Mac the job runs on, with the account when it is not the Mac's own", () => {
