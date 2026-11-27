@@ -84,6 +84,9 @@ export const TOOLS_PARTS = new Set([
   "PROXY_URL",
   "AGENT_MODEL",
   "BUILD_HOSTS",
+  "MAX_SEATS",
+  "maxSeat",
+  "hostLine",
   "HOST_AWAY",
   "MAX_ATTEMPTS",
   "OUTSIDE_STEPS",
@@ -220,12 +223,16 @@ const STATE_COPY =
 // The conflict agent talks to this Mac's model proxy: the signing Mac holds no login of its own.
 const PROXY_URL = process.env.PASEO_FORK_PROXY_URL ?? "http://127.0.0.1:8318";
 const AGENT_MODEL = "claude-opus-5-5";
-// The test Macs the checks and the build run on, the first that answers. Each takes the run
-// under its Max lock (Night's ns-with-max-lock), so a Night Max leg never runs beside a build.
-// Never mini1: it is the machine room, where nothing builds or tests (ALM-4328).
-export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "mini2 mini3")
+// The test Macs the checks and the build run on, the first that answers: the plain Mac, in its
+// test account, as the fleet's split gives every repo that is not Night's or audio work (ALM-5418,
+// ALM-7023). Never mini1: it is the machine room, where nothing builds or tests (ALM-4328).
+export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "almatest@sincoder")
   .split(/[\s,]+/)
   .filter(Boolean);
+// Night's Max seats. One named by hand in PASEO_FORK_BUILD_HOSTS takes the run under its Max lock
+// (Night's ns-with-max-lock), so a Night Max leg never runs beside a build; any other host runs it
+// bare, since the lock's quiet wait and static-run drain would hold the plain Mac's CI off (ALM-7023).
+export const MAX_SEATS = new Set(["mini2", "mini3", "mini4"]);
 // The job's folder on a build host, relative to its home, as ROOT is on the signing Mac.
 const HOST_ROOT = "Coding/_forks/paseo-release";
 const HOST_LOCK = ".local/bin/ns-with-max-lock";
@@ -1294,9 +1301,20 @@ function ssh(host, line, options = {}) {
   return run("ssh", [...connect, ...alive, host, line], { cwd: ROOT, ...options });
 }
 
-/** Whether `host` answers over ssh with its Max lock in place. */
+/** Whether `host` (`mini3`, or `account@mac`) is one of Night's Max seats, whose lock a run takes. */
+export function maxSeat(host) {
+  return MAX_SEATS.has(host.slice(host.lastIndexOf("@") + 1));
+}
+
+/** The ssh line that runs `command` (words) in the job's folder on `host`, under its lock on a Max seat. */
+export function hostLine(host, env, command) {
+  const lock = maxSeat(host) ? `"$HOME"/${HOST_LOCK} ` : "";
+  return `cd ${shellQuote(HOST_ROOT)} && exec env ${shellLine(env)} ${lock}${shellLine(command)}`;
+}
+
+/** Whether `host` answers over ssh, with its Max lock in place on a Max seat. */
 function hostAnswers(host, runDir) {
-  const probe = ssh(host, shellLine(["test", "-x", HOST_LOCK]), {
+  const probe = ssh(host, maxSeat(host) ? shellLine(["test", "-x", HOST_LOCK]) : "true", {
     step: "build-host",
     runDir,
     quiet: true,
@@ -1320,12 +1338,13 @@ function withHost(host, runDir, body) {
   }
 }
 
-/** The first build host that answers with its Max lock in place; HostAway when none does. */
+/** The first build host that answers (a Max seat with its lock in place); HostAway when none does. */
 function pickBuildHost(runDir) {
   for (const host of BUILD_HOSTS) {
     const probe = hostAnswers(host, runDir);
     if (probe.status === 0) return host;
-    log(`  build host ${host} does not answer or has no Max lock (exit ${probe.status})`);
+    const why = maxSeat(host) ? "does not answer or has no Max lock" : "does not answer";
+    log(`  build host ${host} ${why} (exit ${probe.status})`);
   }
   throw new HostAway(`no build host answered (${BUILD_HOSTS.join(", ")})`);
 }
@@ -1385,19 +1404,16 @@ function prepareHost({ host, tag, runDir, job }) {
 }
 
 /**
- * One half of the build on the host, under its Max lock, then its run folder fetched back here,
- * logs included, whatever happened. The host's own result says which step failed.
+ * One half of the build on the host, under its Max lock on a Max seat (hostLine), then its run
+ * folder fetched back here, logs included, whatever happened. The host's own result says which
+ * step failed.
  */
 function runHostPhase({ host, phase, runDir, timeoutMs }) {
   const runName = path.basename(runDir);
   const started = Date.now();
-  const env = shellLine([
-    `PATH=${HOST_PATH}`,
-    "LANG=en_US.UTF-8",
-    "NS_LANE=guest:paseo-fork-release",
-  ]);
-  const command = shellLine(["node", "tools/fork/release.mjs", "--build-host", phase, runName]);
-  const line = `cd ${shellQuote(HOST_ROOT)} && exec env ${env} "$HOME"/${HOST_LOCK} ${command}`;
+  const env = [`PATH=${HOST_PATH}`, "LANG=en_US.UTF-8", "NS_LANE=guest:paseo-fork-release"];
+  const command = ["node", "tools/fork/release.mjs", "--build-host", phase, runName];
+  const line = hostLine(host, env, command);
   const step = `host-${phase}`;
   const result = ssh(host, line, { step, runDir, quiet: true, stream: true, timeoutMs });
   if (HOST_AWAY.has(result.status)) {
