@@ -738,8 +738,10 @@ test("the build runs on the plain Mac by default, never on one of Night's Max se
   assert.ok(hosts.every((host) => !maxSeat(host)));
 });
 
-test("a Max seat named by hand takes the run under its Max lock, any other host runs it bare", () => {
-  for (const host of ["mini2", "mini3", "mini4", "alma@mini3"]) assert.ok(maxSeat(host), host);
+test("a Max seat named by hand takes the run under its Max lock, any other host under the job's own", () => {
+  for (const host of ["mini2", "mini3", "mini4", "alma@mini3", "mini3.local", "alma@mini4.ts.net"]) {
+    assert.ok(maxSeat(host), host);
+  }
   for (const host of ["sincoder", "almatest@sincoder", "mini1", "mini22", "px1"]) {
     assert.ok(!maxSeat(host), host);
   }
@@ -751,7 +753,7 @@ test("a Max seat named by hand takes the run under its Max lock, any other host 
   );
   assert.equal(
     hostLine("almatest@sincoder", env, command),
-    `cd 'Coding/_forks/paseo-release' && exec env ${shellLine(env)} ${shellLine(command)}`,
+    `cd 'Coding/_forks/paseo-release' && exec env ${shellLine(env)} '/usr/bin/lockf' '-t' '0' 'release.lock' ${shellLine(command)}`,
   );
 });
 

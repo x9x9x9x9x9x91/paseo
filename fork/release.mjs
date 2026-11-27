@@ -85,6 +85,7 @@ export const TOOLS_PARTS = new Set([
   "AGENT_MODEL",
   "BUILD_HOSTS",
   "MAX_SEATS",
+  "HOST_ONE",
   "maxSeat",
   "hostLine",
   "HOST_AWAY",
@@ -230,20 +231,25 @@ export const BUILD_HOSTS = (process.env.PASEO_FORK_BUILD_HOSTS ?? "almatest@sinc
   .split(/[\s,]+/)
   .filter(Boolean);
 // Night's Max seats. One named by hand in PASEO_FORK_BUILD_HOSTS takes the run under its Max lock
-// (Night's ns-with-max-lock), so a Night Max leg never runs beside a build; any other host runs it
-// bare, since the lock's quiet wait and static-run drain would hold the plain Mac's CI off (ALM-7023).
+// (Night's ns-with-max-lock), so a Night Max leg never runs beside a build; any other host takes
+// only the job's own lock (HOST_ONE), since the Max lock's quiet wait and static-run drain would
+// hold the plain Mac's CI off (ALM-7023).
 export const MAX_SEATS = new Set(["mini2", "mini3", "mini4"]);
 // The job's folder on a build host, relative to its home, as ROOT is on the signing Mac.
 const HOST_ROOT = "Coding/_forks/paseo-release";
 const HOST_LOCK = ".local/bin/ns-with-max-lock";
+// Off a Max seat, a half runs under this lock file in HOST_ROOT, taken with no wait, so a half that
+// outlived its ssh (nothing there stops it) is never joined by the next run's in the same clone:
+// lockf exits 75 while it is held, busy as HOST_AWAY reads it (ALM-7023).
+const HOST_ONE = ["/usr/bin/lockf", "-t", "0", "release.lock"];
 const HOST_PATH =
   "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 // The branch the candidate is pushed to on the build host's clone.
 const HOST_REF = "refs/heads/fork-candidate";
 // The candidate with its port formatted, which the signing Mac fetches back from the build host.
 const PORT_REF = "refs/heads/fork-formatted";
-// ns-with-max-lock's "gave up waiting" and ssh's "could not connect": the host is busy or away,
-// which is not the candidate's failure.
+// ns-with-max-lock's "gave up waiting", lockf's "already locked" and ssh's "could not connect":
+// the host is busy or away, which is not the candidate's failure.
 const HOST_AWAY = new Set([75, 255]);
 // The app and its signing plan as the build host leaves them, and the signed app sent back to it.
 const APP_ARCHIVE = "unsigned-app.zip";
@@ -1301,14 +1307,20 @@ function ssh(host, line, options = {}) {
   return run("ssh", [...connect, ...alive, host, line], { cwd: ROOT, ...options });
 }
 
-/** Whether `host` (`mini3`, or `account@mac`) is one of Night's Max seats, whose lock a run takes. */
+/**
+ * Whether `host` (`mini3`, `account@mac`, `mini3.local` or a tailnet name) is one of Night's Max
+ * seats, whose lock a run takes: the Mac's name after any account, before any domain.
+ */
 export function maxSeat(host) {
-  return MAX_SEATS.has(host.slice(host.lastIndexOf("@") + 1));
+  return MAX_SEATS.has(host.slice(host.lastIndexOf("@") + 1).split(".")[0]);
 }
 
-/** The ssh line that runs `command` (words) in the job's folder on `host`, under its lock on a Max seat. */
+/**
+ * The ssh line that runs `command` (words) in the job's folder on `host`: under its Max lock on a
+ * Max seat, under the job's own lock (HOST_ONE) anywhere else.
+ */
 export function hostLine(host, env, command) {
-  const lock = maxSeat(host) ? `"$HOME"/${HOST_LOCK} ` : "";
+  const lock = maxSeat(host) ? `"$HOME"/${HOST_LOCK} ` : `${shellLine(HOST_ONE)} `;
   return `cd ${shellQuote(HOST_ROOT)} && exec env ${shellLine(env)} ${lock}${shellLine(command)}`;
 }
 
@@ -1404,7 +1416,8 @@ function prepareHost({ host, tag, runDir, job }) {
 }
 
 /**
- * One half of the build on the host, under its Max lock on a Max seat (hostLine), then its run
+ * One half of the build on the host, under its Max lock on a Max seat or the job's own lock
+ * elsewhere (hostLine), then its run
  * folder fetched back here, logs included, whatever happened. The host's own result says which
  * step failed.
  */
