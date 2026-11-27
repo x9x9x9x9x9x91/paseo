@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { isWeb } from "@/constants/platform";
 import {
   SettingsCard,
   SettingsRow,
@@ -40,8 +41,17 @@ function AttentionProjectSwitch({
   );
 }
 
-/** Settings > Notifications: which projects count toward the dock badge and raise OS banners. */
+/**
+ * Settings > Notifications: which projects count toward the dock badge and raise OS banners.
+ * It renders nothing off web, where phone push comes from the daemon, so the settings screen
+ * renders it with no platform condition of its own and its content function keeps under
+ * oxlint's complexity limit (ALM-7034).
+ */
 export function AttentionProjectsSection() {
+  return isWeb ? <AttentionProjectsCard /> : null;
+}
+
+function AttentionProjectsCard() {
   const { t } = useTranslation();
   const { settings, updateSettings } = useAppSettings();
   const preference = settings.attentionProjects;
