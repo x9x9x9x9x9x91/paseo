@@ -1550,7 +1550,7 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
             <>
               <DesktopNotificationsSection />
               {isDesktopApp ? <DesktopPermissionsSection /> : null}
-              <AttentionProjectsSection />
+              {isWeb ? <AttentionProjectsSection /> : null}
             </>
           );
         case "about":
