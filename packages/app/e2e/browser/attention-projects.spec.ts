@@ -3,6 +3,7 @@ import {
   attentionProjectSwitch,
   attentionProjectsSection,
   chooseAttentionScope,
+  enableAgentFinishedNotifications,
   finishMockAgent,
   readRecordedNotifications,
   recordOsNotifications,
@@ -23,6 +24,7 @@ test("raises OS notifications only for the chosen projects", async ({ page }, te
     await expect(page.getByTestId("settings-sidebar")).toBeVisible();
     await openSettingsSection(page, "notifications");
     await expect(attentionProjectsSection(page)).toBeVisible();
+    await enableAgentFinishedNotifications(page);
 
     await test.step("every project raises a notification by default", async () => {
       await expect(
