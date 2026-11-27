@@ -13,6 +13,8 @@ The app (`packages/app`), the build config (the update feed in `packages/desktop
 
 Commits that belong to the fork itself (the feed, this job) start with `fork: `. Every other commit is a feature, and its upstream pull goes in `UPSTREAM_PULLS` in `release.mjs`. A feature with no upstream pull carries the trailer `Upstream: none` in its message.
 
+A change lands on `fork/release` by a pull request against it, squash-merged by the session that opened it once its review round has passed and the tests it touches ran green on a seat: nothing reads, queues or merges this fork's pull requests, as it carries no lane caller (cleanlane's `lane-wait` on one ends 14 saying so, ALM-7037).
+
 ### Superseded features
 
 A feature upstream replaces with a change of its own, rather than by merging the fork's pull, carries the trailer `Superseded-by: getpaseo/paseo#<pull>` (more than one, comma-separated, when it takes several). The rebase onto the first stable release that carries every pull it names leaves the commit out (a branch already on that release is replayed in place without it), and Tim gets one notice naming it, with the commit message's own words on what takes its place, so its message says that before its trailers. A superseded feature that is also `Upstream: none` stops holding the retirement in that same rebase.
