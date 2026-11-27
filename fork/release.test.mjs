@@ -739,7 +739,14 @@ test("the build runs on the plain Mac by default, never on one of Night's Max se
 });
 
 test("a Max seat named by hand takes the run under its Max lock, any other host under the job's own", () => {
-  for (const host of ["mini2", "mini3", "mini4", "alma@mini3", "mini3.local", "alma@mini4.ts.net"]) {
+  for (const host of [
+    "mini2",
+    "mini3",
+    "mini4",
+    "alma@mini3",
+    "mini3.local",
+    "alma@mini4.ts.net",
+  ]) {
     assert.ok(maxSeat(host), host);
   }
   for (const host of ["sincoder", "almatest@sincoder", "mini1", "mini22", "px1"]) {
